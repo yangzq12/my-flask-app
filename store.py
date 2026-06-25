@@ -311,6 +311,25 @@ def add_product_image(product_id, image_path, image_hash):
             )
 
 
+def replace_product_images(product_id, images, product_image_hash=None):
+    """替换某个商品的全部图片；images 为 [(image_path, image_hash), ...]。"""
+    now = _now()
+    first_path = images[0][0] if images else ""
+    first_hash = product_image_hash if product_image_hash is not None else (images[0][1] if images else "")
+    with get_conn() as conn:
+        conn.execute("DELETE FROM product_images WHERE product_id=?", (product_id,))
+        conn.execute(
+            "UPDATE products SET image_path=?, image_hash=?, updated_at=? WHERE id=?",
+            (first_path, first_hash, now, product_id),
+        )
+        for image_path, image_hash in images:
+            conn.execute(
+                """INSERT INTO product_images(product_id, image_path, image_hash, created_at)
+                   VALUES(?,?,?,?)""",
+                (product_id, image_path, image_hash, now),
+            )
+
+
 def products_with_image_hash():
     """返回所有启用了图片识别且有图片哈希的商品图片（供引擎做多图匹配）。"""
     with get_conn() as conn:

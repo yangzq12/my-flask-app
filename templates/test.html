@@ -14,8 +14,14 @@
     </div>
     <div class="form-row">
       <label>上传图片（可选）</label>
-      <input type="file" name="image" accept="image/*" multiple>
-      <div class="hint">可选择多张，将和每个商品的全部图片做感知哈希比对</div>
+      <div class="image-select-row">
+        <button class="btn btn-secondary btn-sm" type="button" id="test_image_pick_btn">选择图片</button>
+        <span class="hint" id="test_selected_image_count">尚未选择图片</span>
+      </div>
+      <input type="file" id="test_image_file_picker" accept="image/*" class="file-picker-hidden">
+      <input type="file" name="image" id="test_image_upload_files" accept="image/*" multiple class="file-picker-hidden">
+      <div class="thumb-grid pending-grid" id="test_selected_image_preview" hidden></div>
+      <div class="hint">可重复选择多张，将和每个商品的全部图片做感知哈希比对；提交前可移除</div>
     </div>
     <button class="btn" type="submit">开始匹配</button>
   </form>
@@ -39,4 +45,75 @@
   </div>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const pickBtn = document.getElementById('test_image_pick_btn');
+  const picker = document.getElementById('test_image_file_picker');
+  const uploadInput = document.getElementById('test_image_upload_files');
+  const preview = document.getElementById('test_selected_image_preview');
+  const count = document.getElementById('test_selected_image_count');
+  const pendingFiles = [];
+
+  function fileKey(file) {
+    return [file.name, file.size, file.lastModified].join(':');
+  }
+
+  function syncUploadInput() {
+    const transfer = new DataTransfer();
+    pendingFiles.forEach(file => transfer.items.add(file));
+    uploadInput.files = transfer.files;
+  }
+
+  function renderPreview() {
+    preview.innerHTML = '';
+    preview.hidden = pendingFiles.length === 0;
+    count.textContent = pendingFiles.length ? `已选择 ${pendingFiles.length} 张图片` : '尚未选择图片';
+
+    pendingFiles.forEach((file, index) => {
+      const item = document.createElement('div');
+      item.className = 'pending-thumb';
+
+      const img = document.createElement('img');
+      img.className = 'thumb';
+      img.alt = file.name;
+      img.src = URL.createObjectURL(file);
+      img.onload = () => URL.revokeObjectURL(img.src);
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'pending-remove';
+      remove.setAttribute('aria-label', `移除 ${file.name}`);
+      remove.innerHTML = '&times;';
+      remove.addEventListener('click', () => {
+        pendingFiles.splice(index, 1);
+        syncUploadInput();
+        renderPreview();
+      });
+
+      const filename = document.createElement('div');
+      filename.className = 'pending-name';
+      filename.textContent = file.name;
+
+      item.append(img, remove, filename);
+      preview.appendChild(item);
+    });
+  }
+
+  pickBtn.addEventListener('click', () => picker.click());
+  picker.addEventListener('change', () => {
+    const file = picker.files && picker.files[0];
+    picker.value = '';
+    if (!file || !file.type.startsWith('image/')) return;
+
+    const existing = new Set(pendingFiles.map(fileKey));
+    if (!existing.has(fileKey(file))) {
+      pendingFiles.push(file);
+      syncUploadInput();
+      renderPreview();
+    }
+  });
+  renderPreview();
+</script>
 {% endblock %}

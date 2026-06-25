@@ -209,9 +209,12 @@ td .thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; bo
 .stat .num { font-size: 30px; font-weight: 700; color: var(--primary); }
 .stat .label { color: var(--muted); font-size: 13px; margin-top: 6px; }
 
-.toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; }
+.toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 12px; flex-wrap: wrap; }
 .search-box { display: flex; gap: 8px; flex: 1; max-width: 360px; }
 .search-box input { flex: 1; }
+.toolbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.inline-import-form { display: inline-flex; margin: 0; }
+.backup-hint { margin: -2px 0 16px; color: var(--muted); font-size: 12px; }
 
 .logbox {
   background: #0f1c26; color: #b6e3a8; font-family: ui-monospace, Menlo, monospace;

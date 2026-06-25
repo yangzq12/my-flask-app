@@ -10,8 +10,19 @@
       <input type="text" name="q" value="{{ q }}" placeholder="按编码 / 商品名 / 链接 / 店铺搜索">
       <button class="btn" type="submit">查询</button>
     </form>
-    <a class="btn btn-success" href="{{ url_for('product_add') }}">+ 新增商品</a>
+    <div class="toolbar-actions">
+      <a class="btn btn-secondary" href="{{ url_for('products_export') }}">下载备份包</a>
+      <form method="post" action="{{ url_for('products_import') }}" enctype="multipart/form-data" class="inline-import-form">
+        <label class="btn btn-secondary">
+          上传备份包
+          <input class="file-picker-hidden" type="file" name="backup" accept=".zip,application/zip"
+                 onchange="if (this.files.length && confirm('导入备份会按商品唯一编码覆盖已有商品，并替换这些商品的图片，继续？')) { this.form.submit(); } else { this.value = ''; }">
+        </label>
+      </form>
+      <a class="btn btn-success" href="{{ url_for('product_add') }}">+ 新增商品</a>
+    </div>
   </div>
+  <div class="hint backup-hint">备份包包含商品编码、名称、链接、店铺、启用状态和商品图片；导入时相同编码会更新，不存在的编码会新增。</div>
 
   {% if products %}
   <table>

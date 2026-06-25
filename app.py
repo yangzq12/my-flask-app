@@ -8,13 +8,17 @@
   - 引擎控制：启动/停止 Discord 监听，查看永久回复记录
   - 测试匹配：输入文字或上传图片，实时查看会回复什么（演示图片识别）
 """
-import os
 import functools
+import io
+import json
+import os
+import time
 import uuid
+import zipfile
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    session, flash, jsonify, send_from_directory, abort,
+    session, flash, jsonify, send_from_directory, send_file, abort,
 )
 
 import config
@@ -25,7 +29,7 @@ from bot_engine import engine
 
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
-app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB 上传上限
+app.config["MAX_CONTENT_LENGTH"] = 128 * 1024 * 1024  # 支持商品备份包上传
 
 os.makedirs(config.UPLOAD_DIR, exist_ok=True)
 store.init_db()
@@ -136,6 +140,208 @@ def product_delete(pid):
         store.delete_product(pid)
         flash("商品已删除", "success")
     return redirect(url_for("products"))
+
+
+@app.route("/products/export")
+@login_required
+def products_export():
+    """导出商品信息和商品图片为 zip 备份包。"""
+    backup = {
+        "version": 1,
+        "type": "products-backup",
+        "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "products": [],
+    }
+    image_files = []
+
+    for row in store.list_products():
+        p = dict(row)
+        product = {
+            "code": p["code"],
+            "name": p["name"],
+            "link": p["link"],
+            "shop": p["shop"],
+            "image_enabled": int(p["image_enabled"]),
+            "enabled": int(p["enabled"]),
+            "images": [],
+        }
+        seen_paths = set()
+        images = list(store.product_images(p["id"]))
+        if p.get("image_path"):
+            images.append({"image_path": p["image_path"], "image_hash": p.get("image_hash", "")})
+
+        for img in images:
+            image_path = img["image_path"]
+            if not image_path or image_path in seen_paths:
+                continue
+            seen_paths.add(image_path)
+            full_path = os.path.join(config.BASE_DIR, image_path)
+            if not os.path.isfile(full_path):
+                continue
+            ext = os.path.splitext(image_path)[1].lower() or ".jpg"
+            archive_path = f"images/{uuid.uuid4().hex}{ext}"
+            product["images"].append({
+                "archive_path": archive_path,
+                "filename": os.path.basename(image_path),
+                "image_hash": img["image_hash"],
+            })
+            image_files.append((full_path, archive_path))
+
+        backup["products"].append(product)
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("products.json", json.dumps(backup, ensure_ascii=False, indent=2))
+        for full_path, archive_path in image_files:
+            zf.write(full_path, archive_path)
+    buffer.seek(0)
+
+    filename = f"products_backup_{time.strftime('%Y%m%d_%H%M%S')}.zip"
+    return send_file(buffer, mimetype="application/zip", as_attachment=True, download_name=filename)
+
+
+@app.route("/products/import", methods=["POST"])
+@login_required
+def products_import():
+    """从商品备份 zip 恢复商品。相同商品编码会被覆盖。"""
+    file = request.files.get("backup")
+    if not file or not file.filename:
+        flash("请选择商品备份 zip 文件", "error")
+        return redirect(url_for("products"))
+    if not file.filename.lower().endswith(".zip"):
+        flash("只支持上传 zip 格式的商品备份包", "error")
+        return redirect(url_for("products"))
+
+    try:
+        added = updated = image_count = 0
+        with zipfile.ZipFile(io.BytesIO(file.read())) as zf:
+            names = set(zf.namelist())
+            if "products.json" not in names:
+                flash("备份包缺少 products.json", "error")
+                return redirect(url_for("products"))
+
+            payload = json.loads(zf.read("products.json").decode("utf-8"))
+            products_data = payload.get("products")
+            if not isinstance(products_data, list):
+                flash("备份包格式错误：products 必须是列表", "error")
+                return redirect(url_for("products"))
+
+            for item in products_data:
+                if not isinstance(item, dict):
+                    continue
+                code = str(item.get("code", "")).strip()
+                name = str(item.get("name", "")).strip()
+                if not code or not name:
+                    continue
+
+                image_enabled = 1 if str(item.get("image_enabled", "0")) in ("1", "true", "True") else 0
+                enabled = 1 if str(item.get("enabled", "1")) in ("1", "true", "True") else 0
+                images_to_add = []
+                written_files = []
+
+                for img in item.get("images", []) or []:
+                    if not isinstance(img, dict):
+                        continue
+                    archive_path = _clean_zip_path(img.get("archive_path", ""))
+                    if not archive_path or archive_path not in names:
+                        continue
+                    filename = img.get("filename") or archive_path
+                    ext = _image_ext(filename)
+                    if ext not in config.ALLOWED_IMAGE_EXT:
+                        continue
+                    data = zf.read(archive_path)
+                    try:
+                        img_hash = compute_hash(data)
+                    except Exception:
+                        continue
+                    rel = os.path.join("uploads", f"{uuid.uuid4().hex}.{ext}")
+                    with open(os.path.join(config.BASE_DIR, rel), "wb") as out:
+                        out.write(data)
+                    written_files.append(rel)
+                    images_to_add.append((rel, img_hash))
+
+                try:
+                    existing = store.get_product_by_code(code)
+                    first_path = images_to_add[0][0] if images_to_add else ""
+                    first_hash = images_to_add[0][1] if images_to_add and image_enabled else ""
+                    if existing:
+                        old_paths = _product_image_paths(existing["id"])
+                        store.update_product(
+                            existing["id"],
+                            code=code,
+                            name=name,
+                            link=str(item.get("link", "") or ""),
+                            shop=str(item.get("shop", "") or ""),
+                            image_path=first_path,
+                            image_hash=first_hash,
+                            image_enabled=image_enabled,
+                            enabled=enabled,
+                        )
+                        store.replace_product_images(existing["id"], images_to_add, product_image_hash=first_hash)
+                        _delete_upload_files(old_paths - set(written_files))
+                        updated += 1
+                    else:
+                        product_id = store.add_product(
+                            code,
+                            name,
+                            str(item.get("link", "") or ""),
+                            str(item.get("shop", "") or ""),
+                            first_path,
+                            first_hash,
+                            image_enabled,
+                            enabled,
+                        )
+                        store.replace_product_images(product_id, images_to_add, product_image_hash=first_hash)
+                        added += 1
+                    image_count += len(images_to_add)
+                except Exception:
+                    _delete_upload_files(set(written_files))
+                    raise
+
+        flash(f"商品备份导入完成：新增 {added} 个，更新 {updated} 个，图片 {image_count} 张", "success")
+    except (zipfile.BadZipFile, json.JSONDecodeError):
+        flash("备份包无法解析，请确认上传的是系统导出的 zip 文件", "error")
+    except Exception as e:
+        flash(f"导入失败：{e}", "error")
+    return redirect(url_for("products"))
+
+
+def _clean_zip_path(path):
+    path = str(path or "").replace("\\", "/").lstrip("/")
+    parts = [part for part in path.split("/") if part]
+    if not parts or any(part in (".", "..") for part in parts):
+        return ""
+    return "/".join(parts)
+
+
+def _image_ext(filename):
+    filename = os.path.basename(str(filename or ""))
+    if "." not in filename:
+        return ""
+    return filename.rsplit(".", 1)[-1].lower()
+
+
+def _product_image_paths(product_id):
+    paths = {img["image_path"] for img in store.product_images(product_id) if img["image_path"]}
+    product = store.get_product(product_id)
+    if product and product["image_path"]:
+        paths.add(product["image_path"])
+    return paths
+
+
+def _delete_upload_files(paths):
+    for rel in paths:
+        if not rel:
+            continue
+        full_path = os.path.abspath(os.path.join(config.BASE_DIR, rel))
+        upload_root = os.path.abspath(config.UPLOAD_DIR)
+        if not full_path.startswith(upload_root + os.sep):
+            continue
+        try:
+            if os.path.isfile(full_path):
+                os.remove(full_path)
+        except OSError:
+            pass
 
 
 def _save_product(pid):
