@@ -14,7 +14,12 @@
         <label>{{ labels.get(key, key) }} <span class="hint">({{ key }})</span></label>
         {% if key in ['SHOP_WEBSITE', 'CUSTOM_REPLY'] %}
           <input type="text" name="{{ key }}" value="{{ settings.get(key, '') }}">
-        {% elif key in ['SKIP_CHINESE','SKIP_LINK_MSG','IMAGE_MATCH_ENABLED'] %}
+        {% elif key == 'REPLY_MODE' %}
+          <select name="{{ key }}">
+            <option value="reply" {{ 'selected' if settings.get(key, 'reply')=='reply' }}>直接回复</option>
+            <option value="thread" {{ 'selected' if settings.get(key)=='thread' }}>线程回复</option>
+          </select>
+        {% elif key in ['SKIP_CHINESE','SKIP_LINK_MSG','IMAGE_MATCH_ENABLED','MENTION_REPLIED_USER','REPLY_LOG_ENABLED'] %}
           <select name="{{ key }}">
             <option value="1" {{ 'selected' if settings.get(key)=='1' }}>开启 (1)</option>
             <option value="0" {{ 'selected' if settings.get(key)=='0' }}>关闭 (0)</option>

@@ -5,7 +5,7 @@
   - 商品 CRUD：新增 / 修改 / 删除 / 查询（与截图一致），支持启用图片上传与识别
   - 账号管理：Discord token 增删
   - 系统配置：与 reply.py 完全一致的全部配置项
-  - 引擎控制：启动/停止 Discord 监听，查看实时日志
+  - 引擎控制：启动/停止 Discord 监听，查看永久回复记录
   - 测试匹配：输入文字或上传图片，实时查看会回复什么（演示图片识别）
 """
 import os
@@ -16,7 +16,6 @@ from flask import (
     Flask, render_template, request, redirect, url_for,
     session, flash, jsonify, send_from_directory, abort,
 )
-from werkzeug.utils import secure_filename
 
 import config
 import store
@@ -97,7 +96,7 @@ def product_add():
             flash("商品添加成功", "success")
             return redirect(url_for("products"))
         flash(msg, "error")
-    return render_template("product_form.html", product=None, mode="add")
+    return render_template("product_form.html", product=None, images=[], mode="add")
 
 
 # ---------------- 商品：修改 ----------------
@@ -114,7 +113,7 @@ def product_edit(pid):
             return redirect(url_for("products"))
         flash(msg, "error")
         product = store.get_product(pid)
-    return render_template("product_form.html", product=product, mode="edit")
+    return render_template("product_form.html", product=product, images=store.product_images(pid), mode="edit")
 
 
 # ---------------- 商品：删除 ----------------
@@ -124,8 +123,11 @@ def product_delete(pid):
     product = store.get_product(pid)
     if product:
         # 删除关联图片文件
+        image_paths = {img["image_path"] for img in store.product_images(pid) if img["image_path"]}
         if product["image_path"]:
-            fp = os.path.join(config.BASE_DIR, product["image_path"])
+            image_paths.add(product["image_path"])
+        for image_path in image_paths:
+            fp = os.path.join(config.BASE_DIR, image_path)
             if os.path.exists(fp):
                 try:
                     os.remove(fp)
@@ -148,14 +150,14 @@ def _save_product(pid):
     if not code:
         return False, "商品唯一编码为必填项"
     if not name:
-        return False, "商品名为必填项（用于关键词匹配）"
+        return False, "商品名为必填项（用于商品名相似匹配）"
 
     # 唯一编码冲突校验
     existing = store.get_product_by_code(code)
     if existing and (pid is None or existing["id"] != pid):
         return False, f"商品唯一编码「{code}」已存在"
 
-    # 处理图片上传
+    # 处理图片上传。商品可追加多张图，匹配时每张图都会参与比较。
     image_path = ""
     image_hash = ""
     if pid is not None:
@@ -163,34 +165,49 @@ def _save_product(pid):
         image_path = cur["image_path"]
         image_hash = cur["image_hash"]
 
-    file = request.files.get("image")
-    if image_enabled and file and file.filename:
-        ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-        if ext not in config.ALLOWED_IMAGE_EXT:
-            return False, f"不支持的图片格式：.{ext}"
-        data = file.read()
-        try:
-            image_hash = compute_hash(data)
-        except Exception as e:
-            return False, f"图片解析失败：{e}"
-        fname = f"{uuid.uuid4().hex}.{ext}"
-        rel = os.path.join("uploads", fname)
-        with open(os.path.join(config.BASE_DIR, rel), "wb") as f:
-            f.write(data)
-        image_path = rel
+    image_files = [
+        file for file in request.files.getlist("image")
+        if file and file.filename
+    ]
+    images_to_add = []
+    if image_enabled and image_files:
+        for file in image_files:
+            filename = file.filename or ""
+            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+            if ext not in config.ALLOWED_IMAGE_EXT:
+                return False, f"不支持的图片格式：.{ext}"
+            data = file.read()
+            try:
+                img_hash = compute_hash(data)
+            except Exception as e:
+                return False, f"图片解析失败：{e}"
+            fname = f"{uuid.uuid4().hex}.{ext}"
+            rel = os.path.join("uploads", fname)
+            images_to_add.append((rel, img_hash, data))
+
+        if images_to_add and not image_path:
+            image_path = images_to_add[0][0]
+            image_hash = images_to_add[0][1]
 
     if not image_enabled:
-        # 关闭图片识别则清空哈希（保留文件路径以便重新开启时仍能展示）
+        # 关闭图片识别则清空旧兼容字段的哈希；多图文件仍保留，重新开启后继续参与识别。
         image_hash = ""
 
     if pid is None:
-        store.add_product(code, name, link, shop, image_path, image_hash, image_enabled, enabled)
+        product_id = store.add_product(code, name, link, shop, image_path, image_hash, image_enabled, enabled)
     else:
+        product_id = pid
         store.update_product(
             pid, code=code, name=name, link=link, shop=shop,
             image_path=image_path, image_hash=image_hash,
             image_enabled=image_enabled, enabled=enabled,
         )
+
+    for rel, img_hash, data in images_to_add:
+        with open(os.path.join(config.BASE_DIR, rel), "wb") as f:
+            f.write(data)
+        store.add_product_image(product_id, rel, img_hash)
+
     return True, "ok"
 
 
@@ -260,7 +277,12 @@ def settings():
 @app.route("/engine")
 @login_required
 def engine_page():
-    return render_template("engine.html", status=engine.status(), logs=engine.get_logs())
+    return render_template(
+        "engine.html",
+        status=engine.status(),
+        replied_records=store.recent_replied_messages(20),
+        replied_count=store.count_replied_messages(),
+    )
 
 
 @app.route("/engine/start", methods=["POST"])
@@ -279,23 +301,26 @@ def engine_stop():
     return redirect(url_for("engine_page"))
 
 
-@app.route("/engine/logs")
+@app.route("/engine/replied/clear", methods=["POST"])
 @login_required
-def engine_logs():
-    return jsonify({"status": engine.status(), "logs": engine.get_logs()})
+def engine_replied_clear():
+    store.clear_replied_messages()
+    engine.processed.clear()
+    flash("已清空永久回复记录", "success")
+    return redirect(url_for("engine_page"))
 
 
-# ---------------- 测试匹配（演示关键词 + 图片识别）----------------
+# ---------------- 测试匹配（演示商品名相似匹配 + 图片识别）----------------
 @app.route("/test", methods=["GET", "POST"])
 @login_required
 def test_match():
     result = None
     if request.method == "POST":
         text = request.form.get("text", "").strip()
-        image_bytes = None
-        file = request.files.get("image")
-        if file and file.filename:
-            image_bytes = file.read()
+        image_bytes = [
+            file.read() for file in request.files.getlist("image")
+            if file and file.filename
+        ]
         result = matcher.match(content=text, image_bytes=image_bytes, source="web-test")
     return render_template("test.html", result=result)
 
@@ -307,10 +332,10 @@ def api_match():
         text = (request.json or {}).get("text", "")
     else:
         text = request.form.get("text", "")
-    image_bytes = None
-    file = request.files.get("image")
-    if file and file.filename:
-        image_bytes = file.read()
+    image_bytes = [
+        file.read() for file in request.files.getlist("image")
+        if file and file.filename
+    ]
     result = matcher.match(content=text, image_bytes=image_bytes, source="api")
     return jsonify({
         "type": result["type"],
@@ -318,6 +343,7 @@ def api_match():
         "code": result["product"]["code"] if result["product"] else None,
         "name": result["product"]["name"] if result["product"] else None,
         "distance": result["distance"],
+        "similarity": result.get("similarity"),
     })
 
 

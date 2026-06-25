@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% set active = 'test' %}
 {% block title %}测试匹配{% endblock %}
-{% block page_title %}测试匹配（关键词 + 图片识别）{% endblock %}
+{% block page_title %}测试匹配（商品名 + 图片识别）{% endblock %}
 
 {% block content %}
 <div class="card" style="max-width:720px;">
   <h2>模拟一条用户消息</h2>
-  <div class="sub">输入文字或上传图片，查看引擎会回复什么——用于验证关键词与图片识别效果</div>
+  <div class="sub">输入文字或上传图片，查看引擎会回复什么——用于验证商品名相似匹配与图片识别效果</div>
   <form method="post" enctype="multipart/form-data">
     <div class="form-row">
       <label>消息文字</label>
@@ -14,8 +14,8 @@
     </div>
     <div class="form-row">
       <label>上传图片（可选）</label>
-      <input type="file" name="image" accept="image/*">
-      <div class="hint">将与已启用图片识别的商品做感知哈希比对</div>
+      <input type="file" name="image" accept="image/*" multiple>
+      <div class="hint">可选择多张，将和每个商品的全部图片做感知哈希比对</div>
     </div>
     <button class="btn" type="submit">开始匹配</button>
   </form>
@@ -26,8 +26,8 @@
   <h2>匹配结果</h2>
   <div class="result-box">
     <p>匹配类型：
-      {% if result.type=='keyword' %}<span class="tag kw">关键词命中</span>
-      {% elif result.type=='image' %}<span class="tag img">图片识别命中（汉明距离 {{ result.distance }}）</span>
+      {% if result.type=='keyword' %}<span class="tag kw">商品名相似匹配</span>
+      {% elif result.type=='image' %}<span class="tag img">图片识别命中（汉明距离 {{ result.distance }}，相似度 {{ result.similarity }}）</span>
       {% elif result.type=='shop' %}<span class="tag shop">未命中，回退店铺信息</span>
       {% else %}<span class="tag off">无</span>{% endif %}
     </p>

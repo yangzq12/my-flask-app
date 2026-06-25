@@ -24,6 +24,13 @@ import matcher
 CHINESE_RE = re.compile(r"[一-鿿]")
 
 
+def is_image_attachment(attachment):
+    return (
+        attachment.get("content_type", "").startswith("image")
+        or re.search(r"\.(png|jpe?g|gif|webp|bmp)$", attachment.get("filename", ""), re.I)
+    )
+
+
 class BotEngine:
     def __init__(self):
         self._thread = None
@@ -53,9 +60,9 @@ class BotEngine:
     def start(self):
         if self.running:
             return False, "引擎已在运行"
-        accounts = store.list_accounts()
+        accounts = store.active_accounts()
         if not accounts:
-            return False, "没有可用账号，请先在「账号管理」添加 Discord token"
+            return False, "没有可用账号，请先在「账号管理」添加有效 Discord token"
         if not store.get_setting("TARGET_CHANNEL_ID"):
             return False, "未配置监听频道 ID，请先在「系统配置」填写 TARGET_CHANNEL_ID"
         self._stop.clear()
@@ -85,7 +92,7 @@ class BotEngine:
     # ---------- 账号轮换 ----------
     def _next_account(self, skip=None):
         skip = skip or []
-        accounts = [a for a in store.list_accounts() if a["name"] not in skip]
+        accounts = [a for a in store.active_accounts() if a["name"] not in skip]
         if not accounts:
             return None
         now = time.time()
@@ -98,9 +105,65 @@ class BotEngine:
                 return acc
         return None
 
-    # ---------- 发送回复 ----------
-    def _send_reply(self, channel_id, reply_to_msg_id, content, token, acc_name):
+    def _start_thread_from_message(self, channel_id, message_id, token, acc_name):
+        thread_name = (store.get_setting("THREAD_NAME", "Share links here") or "Share links here").strip()
+        thread_name = thread_name[:100] or "Share links here"
         try:
+            headers = {"Authorization": token, "Content-Type": "application/json"}
+            payload = {"name": thread_name, "auto_archive_duration": 1440}
+            resp = requests.post(
+                f"https://discord.com/api/v9/channels/{channel_id}/messages/{message_id}/threads",
+                headers=headers, json=payload, timeout=10,
+            )
+            if resp.status_code in (200, 201):
+                data = resp.json() if resp.content else {}
+                thread_id = data.get("id")
+                if thread_id:
+                    return thread_id
+            self.log(f"⚠️ 账号[{acc_name}]创建线程失败 状态码:{resp.status_code}")
+        except Exception as e:
+            self.log(f"⚠️ 创建线程异常：{str(e)[:40]}")
+        return None
+
+    def _send_channel_message(self, channel_id, content, token, mention_user_id=None):
+        headers = {"Authorization": token, "Content-Type": "application/json"}
+        payload = {"content": content}
+        if mention_user_id:
+            payload["content"] = f"<@{mention_user_id}> {content}"
+            payload["allowed_mentions"] = {"users": [str(mention_user_id)]}
+        resp = requests.post(
+            f"https://discord.com/api/v9/channels/{channel_id}/messages",
+            headers=headers, json=payload, timeout=10,
+        )
+        return resp
+
+    # ---------- 发送回复 ----------
+    def _send_reply(self, channel_id, reply_to_msg_id, content, token, acc_name, user_id=None, thread_id=None):
+        try:
+            mention_replied_user = store.get_setting("MENTION_REPLIED_USER", "0") == "1"
+            reply_mode = (store.get_setting("REPLY_MODE", "reply") or "reply").strip().lower()
+            if reply_mode == "thread":
+                target_thread_id = thread_id or self._start_thread_from_message(
+                    channel_id, reply_to_msg_id, token, acc_name
+                )
+                if target_thread_id:
+                    resp = self._send_channel_message(
+                        target_thread_id,
+                        content,
+                        token,
+                        user_id if mention_replied_user else None,
+                    )
+                    if resp.status_code == 200:
+                        return {
+                            "mode": "thread",
+                            "reply_channel_id": target_thread_id,
+                            "account_name": acc_name,
+                        }
+                    self.log(f"⚠️ 账号[{acc_name}]线程回复失败 状态码:{resp.status_code}，不发送直接回复")
+                    return None
+                self.log(f"⚠️ 账号[{acc_name}]无法创建/获取线程，不发送直接回复")
+                return None
+
             headers = {"Authorization": token, "Content-Type": "application/json"}
             payload = {
                 "content": content,
@@ -109,24 +172,30 @@ class BotEngine:
                     "channel_id": channel_id,
                     "guild_id": None,
                 },
-                "allowed_mentions": {"replied_user": False},
+                "allowed_mentions": {"replied_user": mention_replied_user},
             }
             resp = requests.post(
                 f"https://discord.com/api/v9/channels/{channel_id}/messages",
                 headers=headers, json=payload, timeout=10,
             )
             if resp.status_code == 403:
-                store.delete_account(acc_name)
-                self.log(f"❌ 账号[{acc_name}]被踢出(403)，已删除")
-                return False
-            return resp.status_code == 200
+                store.mark_account_invalid(acc_name, "发送回复返回 403")
+                self.log(f"❌ 账号[{acc_name}]发送返回403，已标记失效")
+                return None
+            if resp.status_code == 200:
+                return {
+                    "mode": "reply",
+                    "reply_channel_id": channel_id,
+                    "account_name": acc_name,
+                }
+            return None
         except Exception as e:
             self.log(f"⚠️ 发送回复异常：{str(e)[:40]}")
-            return False
+            return None
 
-    def _reply_with_rotation(self, channel_id, username, content, reply_to_msg_id):
+    def _reply_with_rotation(self, channel_id, username, content, reply_to_msg_id, user_id=None, thread_id=None):
         skip = []
-        accounts = store.list_accounts()
+        accounts = store.active_accounts()
         for _ in range(max(1, len(accounts))):
             acc = self._next_account(skip)
             if not acc:
@@ -134,20 +203,24 @@ class BotEngine:
                 return
             token = acc["token"]
             if not token:
-                store.delete_account(acc["name"])
+                store.mark_account_invalid(acc["name"], "Token 为空")
                 skip.append(acc["name"])
                 continue
-            ok = self._send_reply(channel_id, reply_to_msg_id, content, token, acc["name"])
-            if ok:
+            send_info = self._send_reply(
+                channel_id, reply_to_msg_id, content, token, acc["name"],
+                user_id=user_id, thread_id=thread_id,
+            )
+            if send_info:
                 cooldown = int(store.get_setting("CHANNEL_COOLDOWN", "300") or 300)
                 store.update_account_usage(
                     acc["name"], time.time() + cooldown,
                     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 )
                 self.log(f"📤 账号[{acc['name']}]回复 @{username} | msg:{reply_to_msg_id}")
-                return
+                return send_info
             skip.append(acc["name"])
         self.log(f"❌ 所有账号尝试完毕，无法回复 msg:{reply_to_msg_id}")
+        return None
 
     # ---------- 下载图片 ----------
     def _download_image(self, url, token):
@@ -173,6 +246,7 @@ class BotEngine:
                 filter_domain = settings.get("FILTER_DOMAIN", "")
                 skip_chinese = settings.get("SKIP_CHINESE", "1") == "1"
                 skip_link = settings.get("SKIP_LINK_MSG", "1") == "1"
+                reply_log_enabled = settings.get("REPLY_LOG_ENABLED", "1") == "1"
                 send_interval = int(settings.get("SEND_INTERVAL", "5") or 5)
 
                 # 自动重启计时（这里只是重置游标 + 日志，不真正退出进程）
@@ -182,9 +256,9 @@ class BotEngine:
                     self.processed.clear()
                     self.log("🔄 达到重启周期，已清理消息缓存")
 
-                accounts = store.list_accounts()
+                accounts = store.active_accounts()
                 if not accounts:
-                    self.log("❌ 无可用账号，引擎停止")
+                    self.log("❌ 无有效账号，引擎停止")
                     break
                 listen_token = accounts[0]["token"]
 
@@ -197,8 +271,8 @@ class BotEngine:
                     resp = requests.get(url, headers=headers, timeout=15)
 
                     if resp.status_code == 403:
-                        store.delete_account(accounts[0]["name"])
-                        self.log(f"🔄 监听账号[{accounts[0]['name']}]被踢，切换中")
+                        store.mark_account_invalid(accounts[0]["name"], "监听消息返回 403")
+                        self.log(f"🔄 监听账号[{accounts[0]['name']}]返回403，已标记失效并切换")
                         time.sleep(listen_interval)
                         continue
                     if resp.status_code != 200:
@@ -219,19 +293,25 @@ class BotEngine:
                             break
                         if not isinstance(msg, dict):
                             continue
-                        if msg.get("author", {}).get("bot") or msg["id"] in self.processed:
+                        msg_id = msg["id"]
+                        msg_channel_id = msg.get("channel_id")
+                        if (
+                            msg.get("author", {}).get("bot")
+                            or msg_id in self.processed
+                            or (reply_log_enabled and store.has_replied_message(msg_channel_id, msg_id))
+                        ):
                             continue
-                        self.processed[msg["id"]] = time.time()
+                        self.processed[msg_id] = time.time()
 
                         content = (msg.get("content") or "").strip()
                         author = msg.get("author", {})
                         username = author.get("username", "未知用户") if isinstance(author, dict) else "未知用户"
+                        user_id = author.get("id") if isinstance(author, dict) else None
+                        thread = msg.get("thread") if isinstance(msg.get("thread"), dict) else {}
+                        thread_id = thread.get("id") if thread else None
                         attachments = msg.get("attachments", []) or []
-                        has_image = any(
-                            (a.get("content_type", "").startswith("image")
-                             or re.search(r"\.(png|jpe?g|gif|webp|bmp)$", a.get("filename", ""), re.I))
-                            for a in attachments
-                        )
+                        image_urls = [a.get("url") for a in attachments if is_image_attachment(a) and a.get("url")]
+                        has_image = bool(image_urls)
 
                         if skip_chinese and CHINESE_RE.search(content):
                             continue
@@ -242,25 +322,41 @@ class BotEngine:
                         if not content and not has_image:
                             continue
 
-                        # 取图片字节（如有）
-                        image_bytes = None
-                        if has_image:
-                            img_url = next(
-                                (a.get("url") for a in attachments
-                                 if a.get("content_type", "").startswith("image")
-                                 or re.search(r"\.(png|jpe?g|gif|webp|bmp)$", a.get("filename", ""), re.I)),
-                                None,
-                            )
-                            if img_url:
-                                image_bytes = self._download_image(img_url, listen_token)
+                        # 取全部图片字节（如有）
+                        image_bytes = []
+                        for img_url in image_urls:
+                            data = self._download_image(img_url, listen_token)
+                            if data:
+                                image_bytes.append(data)
 
                         result = matcher.match(content=content, image_bytes=image_bytes, source="discord")
                         reply = result["link"]
                         if reply:
-                            kind = {"keyword": "关键词", "image": "图片", "shop": "店铺"}.get(result["type"], result["type"])
+                            kind = {"keyword": "商品名", "image": "图片", "shop": "店铺"}.get(result["type"], result["type"])
                             self.log(f"🎯 {kind}匹配 @{username}: {content[:20]}")
-                            self._reply_with_rotation(msg.get("channel_id"), username, reply, msg["id"])
-                            time.sleep(send_interval)
+                            send_info = self._reply_with_rotation(
+                                msg_channel_id, username, reply, msg_id,
+                                user_id=user_id, thread_id=thread_id,
+                            )
+                            if send_info:
+                                if reply_log_enabled:
+                                    store.log_replied_message(
+                                        channel_id=msg_channel_id,
+                                        message_id=msg_id,
+                                        author_id=user_id,
+                                        username=username,
+                                        user_content=content,
+                                        had_image=bool(image_bytes),
+                                        image_urls=image_urls,
+                                        reply_content=reply,
+                                        reply_mode=send_info.get("mode", ""),
+                                        reply_channel_id=send_info.get("reply_channel_id", ""),
+                                        account_name=send_info.get("account_name", ""),
+                                        match_type=result["type"],
+                                        matched_code=result["product"]["code"] if result["product"] else "",
+                                        matched_link=result["link"],
+                                    )
+                                time.sleep(send_interval)
 
                 except requests.RequestException as e:
                     self.last_error = str(e)[:60]

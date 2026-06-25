@@ -17,8 +17,8 @@
     <div class="form-row">
       <label>商品名 <span class="req">*</span></label>
       <input type="text" name="name" value="{{ product['name'] if product else '' }}"
-             placeholder="请输入商品名（也用作关键词匹配，如 AJ6 basketball shoes）" required>
-      <div class="hint">用户消息命中此名中的字母/数字（含 aj6↔j6 变体）即回复对应链接</div>
+             placeholder="请输入商品名，如 AJ6 basketball shoes" required>
+      <div class="hint">系统会把用户消息和全部商品名做相似度比较，返回最相近的商品</div>
     </div>
 
     <div class="form-row">
@@ -47,15 +47,23 @@
 
     <div class="form-row" id="image_field" style="display:none;">
       <label>商品图片</label>
-      {% if product and product['image_path'] %}
-        <div style="margin-bottom:10px;">
-          <img src="{{ url_for('uploaded_file', filename=product['image_path'].split('/')[-1]) }}"
-               class="thumb" style="width:90px;height:90px;">
-          <span class="hint">当前图片（重新上传将替换）</span>
+      {% if images %}
+        <div class="thumb-grid">
+          {% for img in images %}
+            <img src="{{ url_for('uploaded_file', filename=img['image_path'].split('/')[-1]) }}"
+                 class="thumb" style="width:90px;height:90px;">
+          {% endfor %}
         </div>
+        <div class="hint">当前已上传 {{ images|length }} 张图片，新上传会追加到此商品</div>
       {% endif %}
-      <input type="file" name="image" accept="image/*">
-      <div class="hint">支持 png/jpg/jpeg/gif/webp/bmp，系统会计算感知哈希用于识别</div>
+      <div class="image-select-row">
+        <button class="btn btn-secondary btn-sm" type="button" id="image_pick_btn">选择图片</button>
+        <span class="hint" id="selected_image_count">尚未选择新图片</span>
+      </div>
+      <input type="file" id="image_file_picker" accept="image/*" class="file-picker-hidden">
+      <input type="file" name="image" id="image_upload_files" accept="image/*" multiple class="file-picker-hidden">
+      <div class="thumb-grid pending-grid" id="selected_image_preview" hidden></div>
+      <div class="hint">支持 png/jpg/jpeg/gif/webp/bmp，可重复选择图片；提交前可移除待上传图片</div>
     </div>
 
     <div class="form-row">
@@ -80,8 +88,75 @@
 <script>
   const toggle = document.getElementById('image_enabled');
   const field = document.getElementById('image_field');
+  const pickBtn = document.getElementById('image_pick_btn');
+  const picker = document.getElementById('image_file_picker');
+  const uploadInput = document.getElementById('image_upload_files');
+  const preview = document.getElementById('selected_image_preview');
+  const count = document.getElementById('selected_image_count');
+  const pendingFiles = [];
+
   function sync() { field.style.display = toggle.checked ? 'block' : 'none'; }
+
+  function fileKey(file) {
+    return [file.name, file.size, file.lastModified].join(':');
+  }
+
+  function syncUploadInput() {
+    const transfer = new DataTransfer();
+    pendingFiles.forEach(file => transfer.items.add(file));
+    uploadInput.files = transfer.files;
+  }
+
+  function renderPreview() {
+    preview.innerHTML = '';
+    preview.hidden = pendingFiles.length === 0;
+    count.textContent = pendingFiles.length ? `已选择 ${pendingFiles.length} 张新图片` : '尚未选择新图片';
+
+    pendingFiles.forEach((file, index) => {
+      const item = document.createElement('div');
+      item.className = 'pending-thumb';
+
+      const img = document.createElement('img');
+      img.className = 'thumb';
+      img.alt = file.name;
+      img.src = URL.createObjectURL(file);
+      img.onload = () => URL.revokeObjectURL(img.src);
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'pending-remove';
+      remove.setAttribute('aria-label', `移除 ${file.name}`);
+      remove.innerHTML = '&times;';
+      remove.addEventListener('click', () => {
+        pendingFiles.splice(index, 1);
+        syncUploadInput();
+        renderPreview();
+      });
+
+      const filename = document.createElement('div');
+      filename.className = 'pending-name';
+      filename.textContent = file.name;
+
+      item.append(img, remove, filename);
+      preview.appendChild(item);
+    });
+  }
+
   toggle.addEventListener('change', sync);
+  pickBtn.addEventListener('click', () => picker.click());
+  picker.addEventListener('change', () => {
+    const file = picker.files && picker.files[0];
+    picker.value = '';
+    if (!file || !file.type.startsWith('image/')) return;
+
+    const existing = new Set(pendingFiles.map(fileKey));
+    if (!existing.has(fileKey(file))) {
+      pendingFiles.push(file);
+      syncUploadInput();
+      renderPreview();
+    }
+  });
   sync();
+  renderPreview();
 </script>
 {% endblock %}

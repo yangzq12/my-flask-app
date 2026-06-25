@@ -17,7 +17,7 @@
   <table>
     <thead>
       <tr>
-        <th>图片</th><th>唯一编码</th><th>商品名(关键词)</th><th>链接</th>
+        <th>图片</th><th>唯一编码</th><th>商品名</th><th>链接</th>
         <th>店铺</th><th>图片识别</th><th>状态</th><th>操作</th>
       </tr>
     </thead>
@@ -25,8 +25,8 @@
       {% for p in products %}
       <tr>
         <td>
-          {% if p['image_path'] %}
-            <img class="thumb" src="{{ url_for('uploaded_file', filename=p['image_path'].split('/')[-1]) }}">
+          {% if p['first_image_path'] %}
+            <img class="thumb" src="{{ url_for('uploaded_file', filename=p['first_image_path'].split('/')[-1]) }}">
           {% else %}<span class="hint">—</span>{% endif %}
         </td>
         <td><span class="code">{{ p['code'] }}</span></td>
@@ -36,7 +36,7 @@
         </td>
         <td>{{ p['shop'] or '—' }}</td>
         <td>
-          {% if p['image_enabled'] and p['image_hash'] %}<span class="tag img">已启用</span>
+          {% if p['image_enabled'] and p['image_count'] %}<span class="tag img">已启用 {{ p['image_count'] }} 张</span>
           {% else %}<span class="tag off">未启用</span>{% endif %}
         </td>
         <td>

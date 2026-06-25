@@ -28,7 +28,11 @@ DEFAULT_SETTINGS = {
     "RESTART_INTERVAL": "3600",       # 引擎自动重启周期（秒）
     # —— 店铺 / 回复内容 ——
     "SHOP_WEBSITE": "https://你的店铺地址.com",
-    "CUSTOM_REPLY": "欢迎访问我们的店铺查看更多商品~",
+    "CUSTOM_REPLY": "Visit our shop to view more products.",
+    "REPLY_MODE": "reply",            # reply=直接引用回复，thread=在用户消息下开线程回复
+    "THREAD_NAME": "Share links here", # 线程回复模式下的线程名称
+    "MENTION_REPLIED_USER": "0",     # 1=回复消息时 @/通知被回复用户
+    "REPLY_LOG_ENABLED": "1",         # 1=记录已回复消息，重启后避免重复回复
     # —— 过滤规则 ——
     "FILTER_DOMAIN": "Oobuy.com",     # 含该域名的消息不回复
     "SKIP_CHINESE": "1",              # 1=中文消息不回复（与原逻辑一致）
@@ -47,6 +51,10 @@ SETTING_LABELS = {
     "RESTART_INTERVAL": "自动重启周期(秒)",
     "SHOP_WEBSITE": "店铺网址",
     "CUSTOM_REPLY": "默认回复语",
+    "REPLY_MODE": "回复方式",
+    "THREAD_NAME": "线程名称",
+    "MENTION_REPLIED_USER": "回复时@用户(1/0)",
+    "REPLY_LOG_ENABLED": "记录回复消息(1/0)",
     "FILTER_DOMAIN": "过滤域名",
     "SKIP_CHINESE": "跳过中文消息(1/0)",
     "SKIP_LINK_MSG": "跳过含链接消息(1/0)",

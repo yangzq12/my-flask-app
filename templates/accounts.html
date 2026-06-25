@@ -6,7 +6,7 @@
 {% block content %}
 <div class="card" style="max-width:720px;">
   <h2>添加 Discord 账号</h2>
-  <div class="sub">用于轮换发送回复的 Discord 用户 token（与 reply.py 的 accounts.yaml 等价）</div>
+  <div class="sub">有效账号用于监听消息与轮换发送回复；失效账号会保留在列表中便于排查</div>
   <form method="post">
     <input type="hidden" name="action" value="add">
     <div class="grid2">
@@ -27,14 +27,26 @@
   <h2>账号列表</h2>
   {% if accounts %}
   <table>
-    <thead><tr><th>账号名</th><th>Token(脱敏)</th><th>下次可用</th><th>上次使用</th><th>操作</th></tr></thead>
+    <thead><tr><th>账号名</th><th>状态</th><th>Token(脱敏)</th><th>下次可用</th><th>上次使用</th><th>失效信息</th><th>操作</th></tr></thead>
     <tbody>
       {% for a in accounts %}
       <tr>
         <td>{{ a['name'] }}</td>
+        <td>
+          {% if a['status']=='invalid' %}<span class="tag off">失效</span>
+          {% else %}<span class="tag">有效</span>{% endif %}
+        </td>
         <td><span class="code">{{ a['token'][:8] }}…{{ a['token'][-4:] if a['token']|length > 12 else '' }}</span></td>
-        <td>{{ '空闲' if a['next_available_time']|float <= 0 else (a['next_available_time']|float)|round(0)|int }}</td>
+        <td>
+          {% if a['status']=='invalid' %}不可用
+          {% else %}{{ '空闲' if a['next_available_time']|float <= 0 else (a['next_available_time']|float)|round(0)|int }}{% endif %}
+        </td>
         <td>{{ a['last_used_time'] }}</td>
+        <td>
+          {% if a['status']=='invalid' %}
+            {{ a['invalid_reason'] or '未知原因' }}{% if a['invalid_at'] %}<br><span class="hint">{{ a['invalid_at'] }}</span>{% endif %}
+          {% else %}—{% endif %}
+        </td>
         <td>
           <form method="post" style="display:inline" onsubmit="return confirm('删除账号 {{ a['name'] }}？');">
             <input type="hidden" name="action" value="delete">

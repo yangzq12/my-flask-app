@@ -30,7 +30,7 @@
         <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ l['query_text'] or '—' }}</td>
         <td>{{ '是' if l['had_image'] else '否' }}</td>
         <td>
-          {% if l['match_type']=='keyword' %}<span class="tag kw">关键词</span>
+          {% if l['match_type']=='keyword' %}<span class="tag kw">商品名</span>
           {% elif l['match_type']=='image' %}<span class="tag img">图片</span>
           {% elif l['match_type']=='shop' %}<span class="tag shop">店铺回退</span>
           {% else %}<span class="tag off">无</span>{% endif %}
