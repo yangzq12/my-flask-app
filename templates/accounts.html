@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% set active = 'accounts' %}
+{% block title %}账号管理{% endblock %}
+{% block page_title %}账号管理{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:720px;">
+  <h2>添加 Discord 账号</h2>
+  <div class="sub">用于轮换发送回复的 Discord 用户 token（与 reply.py 的 accounts.yaml 等价）</div>
+  <form method="post">
+    <input type="hidden" name="action" value="add">
+    <div class="grid2">
+      <div class="form-row">
+        <label>账号名 <span class="req">*</span></label>
+        <input type="text" name="name" placeholder="如 acc1" required>
+      </div>
+      <div class="form-row">
+        <label>Token <span class="req">*</span></label>
+        <input type="text" name="token" placeholder="Discord 用户 token" required>
+      </div>
+    </div>
+    <button class="btn" type="submit">添加账号</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>账号列表</h2>
+  {% if accounts %}
+  <table>
+    <thead><tr><th>账号名</th><th>Token(脱敏)</th><th>下次可用</th><th>上次使用</th><th>操作</th></tr></thead>
+    <tbody>
+      {% for a in accounts %}
+      <tr>
+        <td>{{ a['name'] }}</td>
+        <td><span class="code">{{ a['token'][:8] }}…{{ a['token'][-4:] if a['token']|length > 12 else '' }}</span></td>
+        <td>{{ '空闲' if a['next_available_time']|float <= 0 else (a['next_available_time']|float)|round(0)|int }}</td>
+        <td>{{ a['last_used_time'] }}</td>
+        <td>
+          <form method="post" style="display:inline" onsubmit="return confirm('删除账号 {{ a['name'] }}？');">
+            <input type="hidden" name="action" value="delete">
+            <input type="hidden" name="name" value="{{ a['name'] }}">
+            <button class="btn btn-sm btn-danger" type="submit">删除</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">暂无账号，请先添加</div>
+  {% endif %}
+</div>
+{% endblock %}

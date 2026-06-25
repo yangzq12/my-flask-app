@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% set active = 'add' if mode=='add' else 'products' %}
+{% block title %}{{ '新增商品' if mode=='add' else '修改商品' }}{% endblock %}
+{% block page_title %}{{ '新增数据' if mode=='add' else '修改数据' }}{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 720px;">
+  <h2>{{ '新增商品' if mode=='add' else '修改商品' }}</h2>
+  <form method="post" enctype="multipart/form-data">
+    <div class="form-row">
+      <label>商品唯一编码 <span class="req">*</span></label>
+      <input type="text" name="code" value="{{ product['code'] if product else '' }}"
+             placeholder="请输入商品唯一编码" required>
+      <div class="hint">用于唯一标识一个商品，例如 FU-AJ6-001</div>
+    </div>
+
+    <div class="form-row">
+      <label>商品名 <span class="req">*</span></label>
+      <input type="text" name="name" value="{{ product['name'] if product else '' }}"
+             placeholder="请输入商品名（也用作关键词匹配，如 AJ6 basketball shoes）" required>
+      <div class="hint">用户消息命中此名中的字母/数字（含 aj6↔j6 变体）即回复对应链接</div>
+    </div>
+
+    <div class="form-row">
+      <label>商品链接</label>
+      <input type="text" name="link" value="{{ product['link'] if product else '' }}"
+             placeholder="请输入商品链接，如 https://weidian.com/item.html?itemID=7...">
+    </div>
+
+    <div class="form-row">
+      <label>店铺名</label>
+      <input type="text" name="shop" value="{{ product['shop'] if product else '' }}"
+             placeholder="请输入店铺名">
+    </div>
+
+    <div class="form-row">
+      <label>启用图片上传 / 识别</label>
+      <div class="switch-row">
+        <label class="switch">
+          <input type="checkbox" name="image_enabled" id="image_enabled"
+                 {{ 'checked' if product and product['image_enabled'] }}>
+          <span class="slider"></span>
+        </label>
+        <span class="hint" style="margin:0;">开启后可上传商品图片，用户发来相似图片时自动识别并回复此商品</span>
+      </div>
+    </div>
+
+    <div class="form-row" id="image_field" style="display:none;">
+      <label>商品图片</label>
+      {% if product and product['image_path'] %}
+        <div style="margin-bottom:10px;">
+          <img src="{{ url_for('uploaded_file', filename=product['image_path'].split('/')[-1]) }}"
+               class="thumb" style="width:90px;height:90px;">
+          <span class="hint">当前图片（重新上传将替换）</span>
+        </div>
+      {% endif %}
+      <input type="file" name="image" accept="image/*">
+      <div class="hint">支持 png/jpg/jpeg/gif/webp/bmp，系统会计算感知哈希用于识别</div>
+    </div>
+
+    <div class="form-row">
+      <div class="switch-row">
+        <label class="switch">
+          <input type="checkbox" name="enabled" {{ 'checked' if (not product) or product['enabled'] }}>
+          <span class="slider"></span>
+        </label>
+        <span class="hint" style="margin:0;">启用该商品（参与匹配与导出）</span>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn" type="submit">{{ '添加商品' if mode=='add' else '保存修改' }}</button>
+      <a class="btn btn-secondary" href="{{ url_for('products') }}">取消</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const toggle = document.getElementById('image_enabled');
+  const field = document.getElementById('image_field');
+  function sync() { field.style.display = toggle.checked ? 'block' : 'none'; }
+  toggle.addEventListener('change', sync);
+  sync();
+</script>
+{% endblock %}

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% set active = 'products' %}
+{% block title %}商品列表{% endblock %}
+{% block page_title %}查询 / 修改 / 删除数据{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="toolbar">
+    <form class="search-box" method="get">
+      <input type="text" name="q" value="{{ q }}" placeholder="按编码 / 商品名 / 链接 / 店铺搜索">
+      <button class="btn" type="submit">查询</button>
+    </form>
+    <a class="btn btn-success" href="{{ url_for('product_add') }}">+ 新增商品</a>
+  </div>
+
+  {% if products %}
+  <table>
+    <thead>
+      <tr>
+        <th>图片</th><th>唯一编码</th><th>商品名(关键词)</th><th>链接</th>
+        <th>店铺</th><th>图片识别</th><th>状态</th><th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in products %}
+      <tr>
+        <td>
+          {% if p['image_path'] %}
+            <img class="thumb" src="{{ url_for('uploaded_file', filename=p['image_path'].split('/')[-1]) }}">
+          {% else %}<span class="hint">—</span>{% endif %}
+        </td>
+        <td><span class="code">{{ p['code'] }}</span></td>
+        <td>{{ p['name'] }}</td>
+        <td style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+          {% if p['link'] %}<a href="{{ p['link'] }}" target="_blank" style="color:var(--primary)">{{ p['link'] }}</a>{% else %}—{% endif %}
+        </td>
+        <td>{{ p['shop'] or '—' }}</td>
+        <td>
+          {% if p['image_enabled'] and p['image_hash'] %}<span class="tag img">已启用</span>
+          {% else %}<span class="tag off">未启用</span>{% endif %}
+        </td>
+        <td>
+          {% if p['enabled'] %}<span class="tag">启用</span>{% else %}<span class="tag off">停用</span>{% endif %}
+        </td>
+        <td>
+          <a class="btn btn-sm" href="{{ url_for('product_edit', pid=p['id']) }}">修改</a>
+          <form method="post" action="{{ url_for('product_delete', pid=p['id']) }}" style="display:inline"
+                onsubmit="return confirm('确认删除商品「{{ p['code'] }}」？');">
+            <button class="btn btn-sm btn-danger" type="submit">删除</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">暂无商品数据，点击右上角「+ 新增商品」开始添加</div>
+  {% endif %}
+</div>
+{% endblock %}

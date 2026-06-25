@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% set active = 'engine' %}
+{% block title %}引擎控制{% endblock %}
+{% block page_title %}引擎控制{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="toolbar">
+    <div>
+      <h2 style="margin:0;">
+        <span class="status-dot {{ 'on' if status.running else 'off' }}"></span>
+        Discord 监听引擎 —— {{ status.status_msg }}
+      </h2>
+      {% if status.last_error %}<div class="hint" style="color:var(--danger)">最近错误：{{ status.last_error }}</div>{% endif %}
+    </div>
+    <div class="actions" style="margin:0;">
+      <form method="post" action="{{ url_for('engine_start') }}"><button class="btn btn-success" {{ 'disabled' if status.running }}>▶ 启动</button></form>
+      <form method="post" action="{{ url_for('engine_stop') }}"><button class="btn btn-danger" {{ 'disabled' if not status.running }}>■ 停止</button></form>
+    </div>
+  </div>
+  <div class="hint">启动前请确保已在「账号管理」添加 token，并在「系统配置」填写监听频道 ID。</div>
+</div>
+
+<div class="card">
+  <h2>实时日志</h2>
+  <div class="logbox" id="logbox">{% for line in logs %}{{ line }}
+{% endfor %}</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const box = document.getElementById('logbox');
+  box.scrollTop = box.scrollHeight;
+  async function poll() {
+    try {
+      const r = await fetch("{{ url_for('engine_logs') }}");
+      const data = await r.json();
+      box.textContent = data.logs.join("\n");
+      box.scrollTop = box.scrollHeight;
+    } catch (e) {}
+  }
+  setInterval(poll, 3000);
+</script>
+{% endblock %}

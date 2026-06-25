@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}管理后台{% endblock %} · Fuck Discord</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">Fuck Discord</div>
+
+    <div class="nav-group-title">数据管理</div>
+    <a class="nav-item {{ 'active' if active=='add' }}" href="{{ url_for('product_add') }}">
+      <span class="ico">📄</span> 新增数据</a>
+    <a class="nav-item {{ 'active' if active=='products' }}" href="{{ url_for('products') }}">
+      <span class="ico">📝</span> 修改数据</a>
+    <a class="nav-item {{ 'active' if active=='delete' }}" href="{{ url_for('products', mode='delete') }}">
+      <span class="ico">🗑️</span> 删除数据</a>
+    <a class="nav-item {{ 'active' if active=='query' }}" href="{{ url_for('products') }}">
+      <span class="ico">🔍</span> 查询数据</a>
+
+    <div class="nav-group-title">系统</div>
+    <a class="nav-item {{ 'active' if active=='dashboard' }}" href="{{ url_for('dashboard') }}">
+      <span class="ico">📊</span> 仪表盘</a>
+    <a class="nav-item {{ 'active' if active=='accounts' }}" href="{{ url_for('accounts') }}">
+      <span class="ico">👤</span> 账号管理</a>
+    <a class="nav-item {{ 'active' if active=='settings' }}" href="{{ url_for('settings') }}">
+      <span class="ico">⚙️</span> 系统配置</a>
+    <a class="nav-item {{ 'active' if active=='engine' }}" href="{{ url_for('engine_page') }}">
+      <span class="ico">🤖</span> 引擎控制</a>
+    <a class="nav-item {{ 'active' if active=='test' }}" href="{{ url_for('test_match') }}">
+      <span class="ico">🧪</span> 测试匹配</a>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <div class="page-title">{% block page_title %}{% endblock %}</div>
+      <div class="user">
+        <span class="status-dot {{ 'on' if engine_running else 'off' }}"></span>
+        引擎{{ '运行中' if engine_running else '已停止' }}
+        ｜ 👋 {{ current_user }}
+        <a href="{{ url_for('logout') }}">退出登录</a>
+      </div>
+    </div>
+    <div class="content">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for cat, msg in messages %}
+          <div class="flash {{ cat }}">{{ msg }}</div>
+        {% endfor %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </div>
+  </div>
+</div>
+{% block scripts %}{% endblock %}
+</body>
+</html>
