@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% set active = 'users' %}
+{% block title %}用户管理{% endblock %}
+{% block page_title %}用户管理{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:760px;">
+  <h2>添加用户</h2>
+  <div class="sub">用户创建后会拥有独立的商品、Discord 账号、系统配置、屏蔽关键字、消息记录和监听引擎</div>
+  <form method="post">
+    <input type="hidden" name="action" value="add">
+    <div class="grid2">
+      <div class="form-row">
+        <label>用户名 <span class="req">*</span></label>
+        <input type="text" name="username" required>
+      </div>
+      <div class="form-row">
+        <label>初始密码 <span class="req">*</span></label>
+        <input type="password" name="password" required>
+      </div>
+    </div>
+    <button class="btn" type="submit">添加用户</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>用户列表</h2>
+  {% if users %}
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th><th>用户名</th><th>角色</th><th>商品数</th><th>Discord 账号</th><th>创建时间</th><th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>{{ u['id'] }}</td>
+        <td>{{ u['username'] }}</td>
+        <td>{% if u['is_admin'] %}<span class="tag">管理员</span>{% else %}<span class="tag off">用户</span>{% endif %}</td>
+        <td>{{ u['product_count'] }}</td>
+        <td>{{ u['account_count'] }}</td>
+        <td>{{ u['created_at'] }}</td>
+        <td>
+          {% if not u['is_admin'] %}
+          <form method="post" style="display:inline-flex; gap:6px; align-items:center;">
+            <input type="hidden" name="action" value="reset_password">
+            <input type="hidden" name="user_id" value="{{ u['id'] }}">
+            <input type="password" name="password" placeholder="新密码" style="width:120px; padding:6px 8px;">
+            <button class="btn btn-sm btn-secondary" type="submit">重置</button>
+          </form>
+          <form method="post" style="display:inline" onsubmit="return confirm('删除用户 {{ u['username'] }} 及其全部数据？');">
+            <input type="hidden" name="action" value="delete">
+            <input type="hidden" name="user_id" value="{{ u['id'] }}">
+            <button class="btn btn-sm btn-danger" type="submit">删除</button>
+          </form>
+          {% else %}
+          <span class="hint">固定管理员</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">暂无用户</div>
+  {% endif %}
+</div>
+{% endblock %}

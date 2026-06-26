@@ -11,6 +11,7 @@
         <span class="status-dot {{ 'on' if status.running else 'off' }}"></span>
         Discord 监听引擎 —— {{ status.status_msg }}
       </h2>
+      <div class="hint">已处理 {{ status.processed }} 条；待回复 {{ status.pending_replies or 0 }} 条。</div>
       {% if status.last_error %}<div class="hint" style="color:var(--danger)">最近错误：{{ status.last_error }}</div>{% endif %}
     </div>
     <div class="actions" style="margin:0;">
@@ -19,54 +20,5 @@
     </div>
   </div>
   <div class="hint">启动前请确保已在「账号管理」添加 token，并在「系统配置」填写监听频道 ID。</div>
-</div>
-
-<div class="card">
-  <div class="toolbar">
-    <div>
-      <h2 style="margin:0;">永久回复记录</h2>
-      <div class="hint">已记录 {{ replied_count }} 条成功回复；记录存在时重启后不会重复回复同一条消息。</div>
-    </div>
-    <form method="post" action="{{ url_for('engine_replied_clear') }}"
-          onsubmit="return confirm('确认清空所有永久回复记录？清空后重启可能再次处理最近消息。');">
-      <button class="btn btn-danger" type="submit" {{ 'disabled' if replied_count == 0 }}>清空记录</button>
-    </form>
-  </div>
-
-  {% if replied_records %}
-  <table>
-    <thead>
-      <tr>
-        <th>时间</th><th>用户</th><th>原消息</th><th>图片URL</th><th>回复内容</th>
-        <th>方式</th><th>账号</th><th>命中</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in replied_records %}
-      <tr>
-        <td>{{ r['created_at'] }}</td>
-        <td>{{ r['username'] or '—' }}</td>
-        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-          {{ r['user_content'] or ('[图片]' if r['had_image'] else '—') }}
-        </td>
-        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ r['image_urls'] or '' }}">
-          {{ r['image_urls'] or '—' }}
-        </td>
-        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ r['reply_content'] }}</td>
-        <td>{{ '线程' if r['reply_mode']=='thread' else '直接回复' }}</td>
-        <td>{{ r['account_name'] or '—' }}</td>
-        <td>
-          {% if r['match_type']=='keyword' %}<span class="tag kw">{{ r['matched_code'] or '商品名' }}</span>
-          {% elif r['match_type']=='image' %}<span class="tag img">{{ r['matched_code'] or '图片' }}</span>
-          {% elif r['match_type']=='shop' %}<span class="tag shop">店铺回退</span>
-          {% else %}<span class="tag off">—</span>{% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <div class="empty">暂无永久回复记录</div>
-  {% endif %}
 </div>
 {% endblock %}

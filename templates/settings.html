@@ -34,21 +34,23 @@
   </form>
 </div>
 
-<div class="card" style="max-width:820px;">
-  <h2>修改登录凭据</h2>
-  <div class="sub">留空则不修改。修改后需用新登录名/密码重新登录。</div>
-  <form method="post">
-    <div class="grid2">
-      <div class="form-row">
-        <label>新登录名</label>
-        <input type="text" name="new_username" placeholder="新的登录名">
+{% if not is_admin %}
+  <div class="card" style="max-width:820px;">
+    <h2>修改登录凭据</h2>
+    <div class="sub">留空则不修改。修改后需用新登录名/密码重新登录。</div>
+    <form method="post">
+      <div class="grid2">
+        <div class="form-row">
+          <label>新登录名</label>
+          <input type="text" name="new_username" placeholder="新的登录名">
+        </div>
+        <div class="form-row">
+          <label>新密码</label>
+          <input type="password" name="new_password" placeholder="新的密码">
+        </div>
       </div>
-      <div class="form-row">
-        <label>新密码</label>
-        <input type="password" name="new_password" placeholder="新的密码">
-      </div>
-    </div>
-    <button class="btn btn-secondary" type="submit">更新登录凭据</button>
-  </form>
-</div>
+      <button class="btn btn-secondary" type="submit">更新登录凭据</button>
+    </form>
+  </div>
+{% endif %}
 {% endblock %}

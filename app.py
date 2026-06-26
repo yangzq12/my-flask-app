@@ -39,15 +39,53 @@ store.init_db()
 def login_required(view):
     @functools.wraps(view)
     def wrapped(*args, **kwargs):
-        if not session.get("user"):
+        if not session.get("user") or not session.get("user_id"):
+            session.clear()
             return redirect(url_for("login", next=request.path))
         return view(*args, **kwargs)
     return wrapped
 
 
+def admin_required(view):
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get("user") or not session.get("user_id"):
+            session.clear()
+            return redirect(url_for("login", next=request.path))
+        if not session.get("is_admin"):
+            abort(403)
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def current_user_id():
+    return int(session["user_id"])
+
+
+def current_engine():
+    return engine.for_user(current_user_id())
+
+
+def upload_path(image_path):
+    image_path = image_path or ""
+    prefix = "uploads/"
+    if image_path.startswith(prefix):
+        return image_path[len(prefix):]
+    return image_path.split("/")[-1]
+
+
 @app.context_processor
 def inject_globals():
-    return {"current_user": session.get("user"), "engine_running": engine.running}
+    engine_running = False
+    if session.get("user_id"):
+        engine_running = engine.running(session["user_id"])
+    return {
+        "current_user": session.get("user"),
+        "current_user_id": session.get("user_id"),
+        "is_admin": bool(session.get("is_admin")),
+        "engine_running": engine_running,
+        "upload_path": upload_path,
+    }
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -55,9 +93,14 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
-        if store.verify_user(username, password):
-            session["user"] = username
+        user = store.authenticate_user(username, password)
+        if user:
+            session["user"] = user["username"]
+            session["user_id"] = user["id"]
+            session["is_admin"] = bool(user["is_admin"])
             nxt = request.args.get("next") or url_for("dashboard")
+            if user["is_admin"] and not request.args.get("next"):
+                nxt = url_for("users")
             return redirect(nxt)
         flash("登录名或密码错误", "error")
     return render_template("login.html")
@@ -69,16 +112,77 @@ def logout():
     return redirect(url_for("login"))
 
 
+# ---------------- 管理员：用户管理 ----------------
+@app.route("/users", methods=["GET", "POST"])
+@admin_required
+def users():
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action == "add":
+            ok, msg = store.create_user(
+                request.form.get("username", ""),
+                request.form.get("password", ""),
+            )
+            flash(msg, "success" if ok else "error")
+        elif action == "delete":
+            target_id = request.form.get("user_id", "")
+            if str(target_id) == str(session.get("user_id")):
+                flash("不能删除当前登录的管理员", "error")
+            else:
+                engine.stop_user(target_id)
+                ok, msg = store.delete_user(target_id)
+                flash(msg, "success" if ok else "error")
+        elif action == "reset_password":
+            ok, msg = store.reset_user_password(
+                request.form.get("user_id", ""),
+                request.form.get("password", ""),
+            )
+            flash(msg, "success" if ok else "error")
+        return redirect(url_for("users"))
+
+    return render_template("users.html", users=store.list_users())
+
+
 # ---------------- 仪表盘 ----------------
 @app.route("/")
 @login_required
 def dashboard():
+    uid = current_user_id()
     return render_template(
         "dashboard.html",
-        stats=store.counts(),
-        logs=store.recent_logs(15),
-        engine_status=engine.status(),
+        stats=store.counts(uid),
+        message_records=store.recent_message_records(uid, 50),
+        engine_status=current_engine().status(),
     )
+
+
+@app.route("/message-records/<int:record_id>/delete", methods=["POST"])
+@login_required
+def message_record_delete(record_id):
+    store.delete_message_record(current_user_id(), record_id)
+    flash("消息处理记录已删除", "success")
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/message-records/delete-selected", methods=["POST"])
+@login_required
+def message_records_delete_selected():
+    deleted = store.delete_message_records(current_user_id(), request.form.getlist("record_ids"))
+    if deleted:
+        flash(f"已删除 {deleted} 条消息处理记录", "success")
+    else:
+        flash("请先选择要删除的消息处理记录", "error")
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/message-records/clear", methods=["POST"])
+@login_required
+def message_records_clear():
+    uid = current_user_id()
+    store.clear_message_records(uid)
+    engine.clear_state(uid)
+    flash("已清空全部消息处理记录", "success")
+    return redirect(url_for("dashboard"))
 
 
 # ---------------- 商品：查询（列表）----------------
@@ -86,7 +190,7 @@ def dashboard():
 @login_required
 def products():
     q = request.args.get("q", "").strip()
-    rows = store.list_products(q or None)
+    rows = store.list_products(current_user_id(), q or None)
     return render_template("products.html", products=rows, q=q)
 
 
@@ -107,7 +211,7 @@ def product_add():
 @app.route("/products/<int:pid>/edit", methods=["GET", "POST"])
 @login_required
 def product_edit(pid):
-    product = store.get_product(pid)
+    product = store.get_product(current_user_id(), pid)
     if not product:
         abort(404)
     if request.method == "POST":
@@ -116,18 +220,24 @@ def product_edit(pid):
             flash("商品已更新", "success")
             return redirect(url_for("products"))
         flash(msg, "error")
-        product = store.get_product(pid)
-    return render_template("product_form.html", product=product, images=store.product_images(pid), mode="edit")
+        product = store.get_product(current_user_id(), pid)
+    return render_template(
+        "product_form.html",
+        product=product,
+        images=store.product_images(current_user_id(), pid),
+        mode="edit",
+    )
 
 
 # ---------------- 商品：删除 ----------------
 @app.route("/products/<int:pid>/delete", methods=["POST"])
 @login_required
 def product_delete(pid):
-    product = store.get_product(pid)
+    uid = current_user_id()
+    product = store.get_product(uid, pid)
     if product:
         # 删除关联图片文件
-        image_paths = {img["image_path"] for img in store.product_images(pid) if img["image_path"]}
+        image_paths = {img["image_path"] for img in store.product_images(uid, pid) if img["image_path"]}
         if product["image_path"]:
             image_paths.add(product["image_path"])
         for image_path in image_paths:
@@ -137,7 +247,7 @@ def product_delete(pid):
                     os.remove(fp)
                 except OSError:
                     pass
-        store.delete_product(pid)
+        store.delete_product(uid, pid)
         flash("商品已删除", "success")
     return redirect(url_for("products"))
 
@@ -154,7 +264,8 @@ def products_export():
     }
     image_files = []
 
-    for row in store.list_products():
+    uid = current_user_id()
+    for row in store.list_products(uid):
         p = dict(row)
         product = {
             "code": p["code"],
@@ -166,7 +277,7 @@ def products_export():
             "images": [],
         }
         seen_paths = set()
-        images = list(store.product_images(p["id"]))
+        images = list(store.product_images(uid, p["id"]))
         if p.get("image_path"):
             images.append({"image_path": p["image_path"], "image_hash": p.get("image_hash", "")})
 
@@ -254,19 +365,22 @@ def products_import():
                         img_hash = compute_hash(data)
                     except Exception:
                         continue
-                    rel = os.path.join("uploads", f"{uuid.uuid4().hex}.{ext}")
+                    rel = os.path.join("uploads", str(current_user_id()), f"{uuid.uuid4().hex}.{ext}")
+                    os.makedirs(os.path.dirname(os.path.join(config.BASE_DIR, rel)), exist_ok=True)
                     with open(os.path.join(config.BASE_DIR, rel), "wb") as out:
                         out.write(data)
                     written_files.append(rel)
                     images_to_add.append((rel, img_hash))
 
                 try:
-                    existing = store.get_product_by_code(code)
+                    uid = current_user_id()
+                    existing = store.get_product_by_code(uid, code)
                     first_path = images_to_add[0][0] if images_to_add else ""
                     first_hash = images_to_add[0][1] if images_to_add and image_enabled else ""
                     if existing:
-                        old_paths = _product_image_paths(existing["id"])
+                        old_paths = _product_image_paths(uid, existing["id"])
                         store.update_product(
+                            uid,
                             existing["id"],
                             code=code,
                             name=name,
@@ -277,11 +391,12 @@ def products_import():
                             image_enabled=image_enabled,
                             enabled=enabled,
                         )
-                        store.replace_product_images(existing["id"], images_to_add, product_image_hash=first_hash)
+                        store.replace_product_images(uid, existing["id"], images_to_add, product_image_hash=first_hash)
                         _delete_upload_files(old_paths - set(written_files))
                         updated += 1
                     else:
                         product_id = store.add_product(
+                            uid,
                             code,
                             name,
                             str(item.get("link", "") or ""),
@@ -291,7 +406,7 @@ def products_import():
                             image_enabled,
                             enabled,
                         )
-                        store.replace_product_images(product_id, images_to_add, product_image_hash=first_hash)
+                        store.replace_product_images(uid, product_id, images_to_add, product_image_hash=first_hash)
                         added += 1
                     image_count += len(images_to_add)
                 except Exception:
@@ -321,9 +436,9 @@ def _image_ext(filename):
     return filename.rsplit(".", 1)[-1].lower()
 
 
-def _product_image_paths(product_id):
-    paths = {img["image_path"] for img in store.product_images(product_id) if img["image_path"]}
-    product = store.get_product(product_id)
+def _product_image_paths(user_id, product_id):
+    paths = {img["image_path"] for img in store.product_images(user_id, product_id) if img["image_path"]}
+    product = store.get_product(user_id, product_id)
     if product and product["image_path"]:
         paths.add(product["image_path"])
     return paths
@@ -359,7 +474,8 @@ def _save_product(pid):
         return False, "商品名为必填项（用于商品名相似匹配）"
 
     # 唯一编码冲突校验
-    existing = store.get_product_by_code(code)
+    uid = current_user_id()
+    existing = store.get_product_by_code(uid, code)
     if existing and (pid is None or existing["id"] != pid):
         return False, f"商品唯一编码「{code}」已存在"
 
@@ -367,7 +483,7 @@ def _save_product(pid):
     image_path = ""
     image_hash = ""
     if pid is not None:
-        cur = store.get_product(pid)
+        cur = store.get_product(uid, pid)
         image_path = cur["image_path"]
         image_hash = cur["image_hash"]
 
@@ -388,7 +504,7 @@ def _save_product(pid):
             except Exception as e:
                 return False, f"图片解析失败：{e}"
             fname = f"{uuid.uuid4().hex}.{ext}"
-            rel = os.path.join("uploads", fname)
+            rel = os.path.join("uploads", str(uid), fname)
             images_to_add.append((rel, img_hash, data))
 
         if images_to_add and not image_path:
@@ -400,19 +516,20 @@ def _save_product(pid):
         image_hash = ""
 
     if pid is None:
-        product_id = store.add_product(code, name, link, shop, image_path, image_hash, image_enabled, enabled)
+        product_id = store.add_product(uid, code, name, link, shop, image_path, image_hash, image_enabled, enabled)
     else:
         product_id = pid
         store.update_product(
-            pid, code=code, name=name, link=link, shop=shop,
+            uid, pid, code=code, name=name, link=link, shop=shop,
             image_path=image_path, image_hash=image_hash,
             image_enabled=image_enabled, enabled=enabled,
         )
 
     for rel, img_hash, data in images_to_add:
+        os.makedirs(os.path.dirname(os.path.join(config.BASE_DIR, rel)), exist_ok=True)
         with open(os.path.join(config.BASE_DIR, rel), "wb") as f:
             f.write(data)
-        store.add_product_image(product_id, rel, img_hash)
+        store.add_product_image(uid, product_id, rel, img_hash)
 
     return True, "ok"
 
@@ -421,6 +538,11 @@ def _save_product(pid):
 @app.route("/uploads/<path:filename>")
 @login_required
 def uploaded_file(filename):
+    rel = os.path.normpath(os.path.join("uploads", filename)).replace("\\", "/")
+    if rel.startswith("../") or rel == ".." or not rel.startswith("uploads/"):
+        abort(404)
+    if not store.owns_upload(current_user_id(), rel):
+        abort(404)
     return send_from_directory(config.UPLOAD_DIR, filename)
 
 
@@ -437,21 +559,42 @@ def accounts():
                 flash("账号名与 token 均不能为空", "error")
             else:
                 try:
-                    store.add_account(name, token)
+                    store.add_account(current_user_id(), name, token)
                     flash("账号已添加", "success")
                 except Exception:
                     flash(f"账号名「{name}」已存在", "error")
         elif action == "delete":
-            store.delete_account(request.form.get("name", ""))
+            store.delete_account(current_user_id(), request.form.get("name", ""))
             flash("账号已删除", "success")
         return redirect(url_for("accounts"))
-    return render_template("accounts.html", accounts=store.list_accounts())
+    return render_template("accounts.html", accounts=store.list_accounts(current_user_id()))
+
+
+# ---------------- 屏蔽关键字 ----------------
+@app.route("/blocked-keywords", methods=["GET", "POST"])
+@login_required
+def blocked_keywords():
+    if request.method == "POST":
+        keyword = request.form.get("keyword", "")
+        ok, msg = store.add_blocked_keyword(current_user_id(), keyword)
+        flash(msg, "success" if ok else "error")
+        return redirect(url_for("blocked_keywords"))
+    return render_template("blocked_keywords.html", keywords=store.list_blocked_keywords(current_user_id()))
+
+
+@app.route("/blocked-keywords/<int:keyword_id>/delete", methods=["POST"])
+@login_required
+def blocked_keyword_delete(keyword_id):
+    store.delete_blocked_keyword(current_user_id(), keyword_id)
+    flash("屏蔽关键字已删除", "success")
+    return redirect(url_for("blocked_keywords"))
 
 
 # ---------------- 系统配置（与 reply.py 等价的全部配置）----------------
 @app.route("/settings", methods=["GET", "POST"])
 @login_required
 def settings():
+    uid = current_user_id()
     if request.method == "POST":
         # 更新配置项
         items = {}
@@ -459,21 +602,22 @@ def settings():
             if key in request.form:
                 items[key] = request.form.get(key, "").strip()
         if items:
-            store.update_settings(items)
+            store.update_settings(uid, items)
             flash("配置已保存", "success")
 
         # 修改登录凭据（可选）
         new_user = request.form.get("new_username", "").strip()
         new_pass = request.form.get("new_password", "")
         if new_user and new_pass:
-            store.change_credentials(session["user"], new_user, new_pass)
-            session["user"] = new_user
-            flash("登录凭据已更新", "success")
+            ok, msg = store.change_credentials(uid, new_user, new_pass)
+            flash(msg, "success" if ok else "error")
+            if ok:
+                session["user"] = new_user
         return redirect(url_for("settings"))
 
     return render_template(
         "settings.html",
-        settings=store.get_settings(),
+        settings=store.get_settings(uid),
         labels=config.SETTING_LABELS,
         keys=list(config.DEFAULT_SETTINGS.keys()),
     )
@@ -485,16 +629,14 @@ def settings():
 def engine_page():
     return render_template(
         "engine.html",
-        status=engine.status(),
-        replied_records=store.recent_replied_messages(20),
-        replied_count=store.count_replied_messages(),
+        status=current_engine().status(),
     )
 
 
 @app.route("/engine/start", methods=["POST"])
 @login_required
 def engine_start():
-    ok, msg = engine.start()
+    ok, msg = current_engine().start()
     flash(msg, "success" if ok else "error")
     return redirect(url_for("engine_page"))
 
@@ -502,7 +644,7 @@ def engine_start():
 @app.route("/engine/stop", methods=["POST"])
 @login_required
 def engine_stop():
-    ok, msg = engine.stop()
+    ok, msg = current_engine().stop()
     flash(msg, "success" if ok else "error")
     return redirect(url_for("engine_page"))
 
@@ -510,10 +652,7 @@ def engine_stop():
 @app.route("/engine/replied/clear", methods=["POST"])
 @login_required
 def engine_replied_clear():
-    store.clear_replied_messages()
-    engine.processed.clear()
-    flash("已清空永久回复记录", "success")
-    return redirect(url_for("engine_page"))
+    return redirect(url_for("dashboard"))
 
 
 # ---------------- 测试匹配（演示商品名相似匹配 + 图片识别）----------------
@@ -527,22 +666,47 @@ def test_match():
             file.read() for file in request.files.getlist("image")
             if file and file.filename
         ]
-        result = matcher.match(content=text, image_bytes=image_bytes, source="web-test")
+        uid = current_user_id()
+        blocked_keyword = store.find_blocked_keyword(uid, text)
+        if blocked_keyword:
+            result = {
+                "type": "blocked",
+                "product": None,
+                "link": "",
+                "distance": None,
+                "similarity": None,
+                "blocked_keyword": blocked_keyword,
+            }
+        else:
+            result = matcher.match(content=text, image_bytes=image_bytes, source="web-test", user_id=uid)
     return render_template("test.html", result=result)
 
 
 # ---------------- 对外匹配 API（可被其它系统调用）----------------
 @app.route("/api/match", methods=["POST"])
+@login_required
 def api_match():
+    uid = current_user_id()
     if request.is_json:
         text = (request.json or {}).get("text", "")
     else:
         text = request.form.get("text", "")
+    blocked_keyword = store.find_blocked_keyword(uid, text)
+    if blocked_keyword:
+        return jsonify({
+            "type": "blocked",
+            "link": "",
+            "code": None,
+            "name": None,
+            "distance": None,
+            "similarity": None,
+            "blocked_keyword": blocked_keyword,
+        })
     image_bytes = [
         file.read() for file in request.files.getlist("image")
         if file and file.filename
     ]
-    result = matcher.match(content=text, image_bytes=image_bytes, source="api")
+    result = matcher.match(content=text, image_bytes=image_bytes, source="api", user_id=uid)
     return jsonify({
         "type": result["type"],
         "link": result["link"],

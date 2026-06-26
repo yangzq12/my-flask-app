@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% set active = 'blocked_keywords' %}
+{% block title %}屏蔽关键字{% endblock %}
+{% block page_title %}屏蔽关键字{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:720px;">
+  <h2>添加屏蔽关键字</h2>
+  <div class="sub">用户消息中只要包含任意屏蔽关键字，引擎就会跳过该消息，不做商品匹配也不回复。</div>
+  <form method="post">
+    <div class="form-row">
+      <label>屏蔽关键字 <span class="req">*</span></label>
+      <input type="text" name="keyword" placeholder="如 qc / sold out / 不要回复" required>
+      <div class="hint">英文大小写不敏感；中文按包含关系匹配。</div>
+    </div>
+    <button class="btn" type="submit">添加关键字</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>已添加的屏蔽关键字</h2>
+  {% if keywords %}
+  <table>
+    <thead>
+      <tr><th>关键字</th><th>添加时间</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+      {% for item in keywords %}
+      <tr>
+        <td><span class="code">{{ item['keyword'] }}</span></td>
+        <td>{{ item['created_at'] }}</td>
+        <td>
+          <form method="post" action="{{ url_for('blocked_keyword_delete', keyword_id=item['id']) }}"
+                style="display:inline"
+                onsubmit="return confirm({{ ('删除屏蔽关键字「' ~ item['keyword'] ~ '」？')|tojson|forceescape }});">
+            <button class="btn btn-sm btn-danger" type="submit">删除</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">暂无屏蔽关键字</div>
+  {% endif %}
+</div>
+{% endblock %}

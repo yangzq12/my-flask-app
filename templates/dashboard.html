@@ -18,30 +18,86 @@
 </div>
 
 <div class="card">
-  <h2>最近匹配记录</h2>
-  {% if logs %}
+  <div class="toolbar">
+    <div>
+      <h2 style="margin:0;">消息处理记录</h2>
+      <div class="hint">删除已发送记录后，重启时将不再用该记录防重复。</div>
+    </div>
+    <div class="toolbar-actions">
+      <button class="btn btn-secondary" type="submit" form="message_records_form"
+              formaction="{{ url_for('message_records_delete_selected') }}"
+              onclick="return confirm('删除选中的消息处理记录？');"
+              {{ 'disabled' if not message_records }}>
+        删除选中
+      </button>
+      <button class="btn btn-danger" type="submit" form="message_records_form"
+              formaction="{{ url_for('message_records_clear') }}"
+              onclick="return confirm('确认删除全部消息处理记录？清空后重启可能再次处理最近消息。');"
+              {{ 'disabled' if not message_records }}>
+        全部删除
+      </button>
+    </div>
+  </div>
+  {% if message_records %}
+  <form method="post" id="message_records_form">
   <table>
-    <thead><tr><th>时间</th><th>来源</th><th>查询内容</th><th>含图</th><th>匹配类型</th><th>命中编码</th></tr></thead>
-    <tbody>
-      {% for l in logs %}
+    <thead>
       <tr>
-        <td>{{ l['created_at'] }}</td>
-        <td>{{ l['source'] }}</td>
-        <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ l['query_text'] or '—' }}</td>
-        <td>{{ '是' if l['had_image'] else '否' }}</td>
-        <td>
-          {% if l['match_type']=='keyword' %}<span class="tag kw">商品名</span>
-          {% elif l['match_type']=='image' %}<span class="tag img">图片</span>
-          {% elif l['match_type']=='shop' %}<span class="tag shop">店铺回退</span>
-          {% else %}<span class="tag off">无</span>{% endif %}
+        <th><input type="checkbox" id="record_select_all" aria-label="选择全部记录"></th>
+        <th>时间</th><th>用户</th><th>原消息</th><th>含图</th><th>匹配结果</th><th>状态</th><th>回复内容</th><th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in message_records %}
+      <tr>
+        <td><input type="checkbox" name="record_ids" value="{{ r['id'] }}" class="record-check" aria-label="选择记录 {{ r['id'] }}"></td>
+        <td>{{ r['created_at'] }}</td>
+        <td>{{ r['username'] or '—' }}</td>
+        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+          {{ r['user_content'] or ('[图片]' if r['had_image'] else '—') }}
         </td>
-        <td>{{ l['matched_code'] or '—' }}</td>
+        <td>{{ '是' if r['had_image'] else '否' }}</td>
+        <td>
+          {% if r['match_type']=='keyword' %}<span class="tag kw">文字匹配 {{ r['matched_code'] }}</span>
+          {% elif r['match_type']=='image' %}<span class="tag img">图片匹配 {{ r['matched_code'] }}</span>
+          {% elif r['match_type'] in ['none','shop'] %}<span class="tag shop">不匹配</span>
+          {% elif r['match_type']=='skipped' %}<span class="tag off">跳过</span>
+          {% else %}<span class="tag off">—</span>{% endif %}
+        </td>
+        <td>
+          {% if r['reply_status']=='sent' %}<span class="tag">已发送</span>
+          {% elif r['reply_status']=='pending' %}<span class="tag shop">待回复</span>
+          {% elif r['reply_status']=='failed' %}<span class="tag off">发送失败</span>
+          {% elif r['reply_status']=='skipped' %}<span class="tag off">{{ r['skip_reason'] or '已跳过' }}</span>
+          {% else %}<span class="tag off">—</span>{% endif %}
+        </td>
+        <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ r['reply_content'] or '—' }}</td>
+        <td>
+          <button class="btn btn-sm btn-danger" type="submit"
+                  formaction="{{ url_for('message_record_delete', record_id=r['id']) }}"
+                  onclick="return confirm('删除这条消息处理记录？');">
+            删除
+          </button>
+        </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  </form>
   {% else %}
-  <div class="empty">暂无匹配记录</div>
+  <div class="empty">暂无消息处理记录</div>
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const selectAll = document.getElementById('record_select_all');
+  const checks = Array.from(document.querySelectorAll('.record-check'));
+  if (selectAll) {
+    selectAll.addEventListener('change', () => {
+      checks.forEach(check => { check.checked = selectAll.checked; });
+    });
+  }
+</script>
 {% endblock %}

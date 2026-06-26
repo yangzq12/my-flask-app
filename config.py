@@ -13,6 +13,10 @@ PRODUCT_MAP_FILE = os.path.join(BASE_DIR, "data", "product_maps.yaml")
 # 网页会话密钥（生产环境请用环境变量覆盖）
 SECRET_KEY = os.getenv("SECRET_KEY", "fuck-discord-change-me-please")
 
+# 固定管理员登录入口。管理员用于创建/删除普通用户。
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+
 # 允许上传的图片类型
 ALLOWED_IMAGE_EXT = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}
 
@@ -34,12 +38,11 @@ DEFAULT_SETTINGS = {
     "MENTION_REPLIED_USER": "0",     # 1=回复消息时 @/通知被回复用户
     "REPLY_LOG_ENABLED": "1",         # 1=记录已回复消息，重启后避免重复回复
     # —— 过滤规则 ——
-    "FILTER_DOMAIN": "Oobuy.com",     # 含该域名的消息不回复
     "SKIP_CHINESE": "1",              # 1=中文消息不回复（与原逻辑一致）
-    "SKIP_LINK_MSG": "1",             # 1=含 http 链接的消息不回复
+    "SKIP_LINK_MSG": "1",             # 1=含链接/域名的消息不回复
     # —— 图片识别（新增功能）——
     "IMAGE_MATCH_ENABLED": "1",       # 1=开启用户图片识别
-    "IMAGE_MATCH_THRESHOLD": "16",    # 感知哈希组合距离阈值(0~128,越小越严格)
+    "IMAGE_MATCH_THRESHOLD": "0.875", # 图片相似度阈值(0~1,越大越严格)，等价旧距离阈值 16
 }
 
 SETTING_LABELS = {
@@ -55,9 +58,8 @@ SETTING_LABELS = {
     "THREAD_NAME": "线程名称",
     "MENTION_REPLIED_USER": "回复时@用户(1/0)",
     "REPLY_LOG_ENABLED": "记录回复消息(1/0)",
-    "FILTER_DOMAIN": "过滤域名",
     "SKIP_CHINESE": "跳过中文消息(1/0)",
     "SKIP_LINK_MSG": "跳过含链接消息(1/0)",
     "IMAGE_MATCH_ENABLED": "开启图片识别(1/0)",
-    "IMAGE_MATCH_THRESHOLD": "图片匹配阈值",
+    "IMAGE_MATCH_THRESHOLD": "图片相似度阈值(0-1)",
 }

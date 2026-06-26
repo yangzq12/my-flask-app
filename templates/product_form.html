@@ -50,7 +50,7 @@
       {% if images %}
         <div class="thumb-grid">
           {% for img in images %}
-            <img src="{{ url_for('uploaded_file', filename=img['image_path'].split('/')[-1]) }}"
+            <img src="{{ url_for('uploaded_file', filename=upload_path(img['image_path'])) }}"
                  class="thumb" style="width:90px;height:90px;">
           {% endfor %}
         </div>
