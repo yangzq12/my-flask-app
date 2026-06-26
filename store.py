@@ -116,7 +116,13 @@ def _ensure_default_settings(conn, user_id):
     _normalize_image_threshold_setting(conn, user_id)
     conn.execute(
         """DELETE FROM settings
-           WHERE user_id=? AND key IN ('MESSAGE_RECORD_EXPIRE_DAYS', 'MESSAGE_RECORD_MAX_ROWS')""",
+           WHERE user_id=?
+             AND key IN (
+                 'PROCESSED_MSG_EXPIRE',
+                 'RESTART_INTERVAL',
+                 'MESSAGE_RECORD_EXPIRE_DAYS',
+                 'MESSAGE_RECORD_MAX_ROWS'
+             )""",
         (user_id,),
     )
 

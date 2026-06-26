@@ -22,6 +22,7 @@ import store
 import matcher
 
 CHINESE_RE = re.compile(r"[一-鿿]")
+PENDING_REPLY_EXPIRE = 3600
 MESSAGE_RECORD_MAX_ROWS = 3000
 LINK_RE = re.compile(
     r"""(?ix)
@@ -367,24 +368,15 @@ class BotEngine:
             skip_reason=reason,
         )
 
-    def _cleanup_runtime_state(self, processed_expire, reply_log_enabled):
+    def _cleanup_runtime_state(self, reply_log_enabled):
         now = time.time()
-        expire_seconds = max(60, int(processed_expire or 3600))
-
-        for msg_id, ts in list(self.processed.items()):
-            try:
-                expired = now - float(ts or 0) > expire_seconds
-            except (TypeError, ValueError):
-                expired = True
-            if expired:
-                self.processed.pop(msg_id, None)
 
         for msg_id, task in list(self.pending_replies.items()):
             try:
                 queued_at = float(task.get("queued_at") or now)
             except (TypeError, ValueError):
                 queued_at = now
-            if now - queued_at > expire_seconds:
+            if now - queued_at > PENDING_REPLY_EXPIRE:
                 self.pending_replies.pop(msg_id, None)
                 self.processed[msg_id] = now
                 self._record_failed_reply(task, "pending_expired", reply_log_enabled)
@@ -470,27 +462,17 @@ class BotEngine:
     def _run(self):
         self.log("🚀 引擎启动，开始监听")
         last_id = None
-        restart_timer = 0
         try:
             while not self._stop.is_set():
                 settings = store.get_settings(self.user_id)
                 channel_id = settings.get("TARGET_CHANNEL_ID", "")
                 listen_interval = self._int_setting(settings, "LISTEN_INTERVAL", 5, minimum=1)
-                restart_interval = self._int_setting(settings, "RESTART_INTERVAL", 3600, minimum=0)
-                processed_expire = self._int_setting(settings, "PROCESSED_MSG_EXPIRE", 3600, minimum=60)
                 skip_chinese = settings.get("SKIP_CHINESE", "1") == "1"
                 skip_link = settings.get("SKIP_LINK_MSG", "1") == "1"
                 reply_log_enabled = settings.get("REPLY_LOG_ENABLED", "1") == "1"
                 send_interval = self._int_setting(settings, "SEND_INTERVAL", 5, minimum=0)
-                self._cleanup_runtime_state(processed_expire, reply_log_enabled)
+                self._cleanup_runtime_state(reply_log_enabled)
                 self._cleanup_message_records()
-
-                # 自动重启计时（这里只是重置游标 + 日志，不真正退出进程）
-                restart_timer += listen_interval
-                if restart_interval > 0 and restart_timer >= restart_interval:
-                    restart_timer = 0
-                    self.processed.clear()
-                    self.log("🔄 达到重启周期，已清理消息缓存")
 
                 accounts = store.active_accounts(self.user_id)
                 if not accounts:

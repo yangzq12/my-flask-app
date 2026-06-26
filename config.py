@@ -28,8 +28,6 @@ DEFAULT_SETTINGS = {
     "CHANNEL_COOLDOWN": "300",        # 单账号回复冷却（秒）
     "SEND_INTERVAL": "5",             # 每次发送后的间隔（秒）
     "LISTEN_INTERVAL": "5",           # 轮询拉取消息的间隔（秒）
-    "PROCESSED_MSG_EXPIRE": "3600",   # 已处理消息记录过期（秒）
-    "RESTART_INTERVAL": "3600",       # 引擎自动重启周期（秒）
     # —— 店铺 / 回复内容 ——
     "SHOP_WEBSITE": "https://你的店铺地址.com",
     "CUSTOM_REPLY": "Visit our shop to view more products.",
@@ -50,8 +48,6 @@ SETTING_LABELS = {
     "CHANNEL_COOLDOWN": "单账号冷却(秒)",
     "SEND_INTERVAL": "发送间隔(秒)",
     "LISTEN_INTERVAL": "轮询间隔(秒)",
-    "PROCESSED_MSG_EXPIRE": "消息记录过期(秒)",
-    "RESTART_INTERVAL": "自动重启周期(秒)",
     "SHOP_WEBSITE": "店铺网址",
     "CUSTOM_REPLY": "默认回复语",
     "REPLY_MODE": "回复方式",
