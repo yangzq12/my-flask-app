@@ -19,6 +19,6 @@
       <form method="post" action="{{ url_for('engine_stop') }}"><button class="btn btn-danger" {{ 'disabled' if not status.running }}>■ 停止</button></form>
     </div>
   </div>
-  <div class="hint">启动前请确保已在「账号管理」添加 token，并在「系统配置」填写监听频道 ID。</div>
+  <div class="hint">启动前请确保已在「Discord 账号」添加 token，并在「系统配置」填写监听频道 ID。</div>
 </div>
 {% endblock %}

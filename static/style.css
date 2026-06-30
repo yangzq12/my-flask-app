@@ -129,6 +129,19 @@ a { text-decoration: none; color: inherit; }
 .switch input:checked + .slider { background: var(--primary); }
 .switch input:checked + .slider:before { transform: translateX(24px); }
 .switch-row { display: flex; align-items: center; gap: 12px; }
+.link-converter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.link-converter-row select {
+  width: auto;
+  min-width: 140px;
+  padding: 7px 10px;
+}
+.link-converter-row .hint { margin-top: 0; }
 
 /* ---------- 按钮 ---------- */
 .btn {
@@ -148,6 +161,14 @@ a { text-decoration: none; color: inherit; }
 .btn-danger:hover { background: #c0392b; }
 .btn-sm { padding: 6px 12px; font-size: 13px; }
 .btn-success { background: var(--success); }
+.btn.disabled,
+.btn.disabled:hover,
+.btn:disabled,
+.btn:disabled:hover {
+  background: #cbd5e0;
+  color: #f8fafc;
+  cursor: not-allowed;
+}
 .actions { display: flex; gap: 12px; margin-top: 8px; }
 
 /* ---------- 表格 ---------- */
@@ -195,6 +216,8 @@ td .thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; bo
 .tag.kw { background: #e8f8ef; color: #27ae60; }
 .tag.img { background: #fff3e0; color: #e67e22; }
 .tag.shop { background: #eef0f3; color: #7f8c9b; }
+.message-link { color: var(--primary); }
+.message-link:hover { text-decoration: underline; }
 
 /* ---------- 提示 / 统计 ---------- */
 .flash { padding: 12px 16px; border-radius: 7px; margin-bottom: 16px; font-size: 14px; }
@@ -213,7 +236,56 @@ td .thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; bo
 .search-box { display: flex; gap: 8px; flex: 1; max-width: 360px; }
 .search-box input { flex: 1; }
 .toolbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.record-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 8px 0 16px;
+  color: #46586b;
+  font-size: 14px;
+}
+.record-filter-label { color: var(--muted); }
+.check-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #fbfcfe;
+  cursor: pointer;
+}
+.check-pill input { margin: 0; }
+.pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.pager-info { color: var(--muted); font-size: 13px; }
 .inline-import-form { display: inline-flex; margin: 0; }
+.switch-account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.switch-account-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+.switch-account-name {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
 .backup-hint { margin: -2px 0 16px; color: var(--muted); font-size: 12px; }
 
 .logbox {

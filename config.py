@@ -13,7 +13,7 @@ PRODUCT_MAP_FILE = os.path.join(BASE_DIR, "data", "product_maps.yaml")
 # 网页会话密钥（生产环境请用环境变量覆盖）
 SECRET_KEY = os.getenv("SECRET_KEY", "fuck-discord-change-me-please")
 
-# 固定管理员登录入口。管理员用于创建/删除普通用户。
+# 初始登录账号。后续账号可在页面里平级添加和切换。
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
@@ -38,6 +38,8 @@ DEFAULT_SETTINGS = {
     # —— 过滤规则 ——
     "SKIP_CHINESE": "1",              # 1=中文消息不回复（与原逻辑一致）
     "SKIP_LINK_MSG": "1",             # 1=含链接/域名的消息不回复
+    "IMAGE_OCR_FILTER_ENABLED": "0",  # 1=识别用户图片里的文字，命中屏蔽关键字则不回复
+    "IMAGE_OCR_LANGUAGES": "eng",     # Tesseract OCR 语言，如 eng 或 eng+chi_sim
     # —— 图片识别（新增功能）——
     "IMAGE_MATCH_ENABLED": "1",       # 1=开启用户图片识别
     "IMAGE_MATCH_THRESHOLD": "0.875", # 图片相似度阈值(0~1,越大越严格)，等价旧距离阈值 16
@@ -56,6 +58,8 @@ SETTING_LABELS = {
     "REPLY_LOG_ENABLED": "记录回复消息(1/0)",
     "SKIP_CHINESE": "跳过中文消息(1/0)",
     "SKIP_LINK_MSG": "跳过含链接消息(1/0)",
+    "IMAGE_OCR_FILTER_ENABLED": "开启图片文字屏蔽(1/0)",
+    "IMAGE_OCR_LANGUAGES": "图片文字识别语言",
     "IMAGE_MATCH_ENABLED": "开启图片识别(1/0)",
     "IMAGE_MATCH_THRESHOLD": "图片相似度阈值(0-1)",
 }

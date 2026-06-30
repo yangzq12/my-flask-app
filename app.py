@@ -3,7 +3,7 @@
 功能：
   - 登录鉴权（登录名 + 密码）
   - 商品 CRUD：新增 / 修改 / 删除 / 查询（与截图一致），支持启用图片上传与识别
-  - 账号管理：Discord token 增删
+  - Discord 账号：Discord token 增删
   - 系统配置：与 reply.py 完全一致的全部配置项
   - 引擎控制：启动/停止 Discord 监听，查看永久回复记录
   - 测试匹配：输入文字或上传图片，实时查看会回复什么（演示图片识别）
@@ -15,6 +15,7 @@ import os
 import time
 import uuid
 import zipfile
+from urllib.parse import urlencode
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
@@ -24,6 +25,7 @@ from flask import (
 import config
 import store
 import matcher
+import image_text_filter
 from imagehash_util import compute_hash
 from bot_engine import engine
 
@@ -33,6 +35,9 @@ app.config["MAX_CONTENT_LENGTH"] = 128 * 1024 * 1024  # 支持商品备份包上
 
 os.makedirs(config.UPLOAD_DIR, exist_ok=True)
 store.init_db()
+
+MESSAGE_RECORD_PAGE_SIZE = 50
+MESSAGE_RECORD_TYPES = ("matched", "unmatched", "skipped")
 
 
 # ---------------- 鉴权 ----------------
@@ -46,24 +51,47 @@ def login_required(view):
     return wrapped
 
 
-def admin_required(view):
-    @functools.wraps(view)
-    def wrapped(*args, **kwargs):
-        if not session.get("user") or not session.get("user_id"):
-            session.clear()
-            return redirect(url_for("login", next=request.path))
-        if not session.get("is_admin"):
-            abort(403)
-        return view(*args, **kwargs)
-    return wrapped
-
-
 def current_user_id():
     return int(session["user_id"])
 
 
 def current_engine():
     return engine.for_user(current_user_id())
+
+
+def _set_login_session(user):
+    session["user"] = user["username"]
+    session["user_id"] = user["id"]
+
+
+def _positive_int_arg(name, default=1, minimum=1):
+    try:
+        value = int(request.args.get(name, default))
+        return value if value >= minimum else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _selected_message_record_types():
+    if "record_filter" not in request.args:
+        return list(MESSAGE_RECORD_TYPES)
+    selected = request.args.getlist("types")
+    return [t for t in MESSAGE_RECORD_TYPES if t in selected]
+
+
+def _dashboard_record_url(page, record_types):
+    query = urlencode(
+        {"record_filter": "1", "types": list(record_types), "page": page},
+        doseq=True,
+    )
+    return f"{url_for('dashboard')}?{query}"
+
+
+def _dashboard_redirect():
+    next_url = request.form.get("next", "")
+    if next_url.startswith("/") and not next_url.startswith("//"):
+        return redirect(next_url)
+    return redirect(url_for("dashboard"))
 
 
 def upload_path(image_path):
@@ -82,7 +110,6 @@ def inject_globals():
     return {
         "current_user": session.get("user"),
         "current_user_id": session.get("user_id"),
-        "is_admin": bool(session.get("is_admin")),
         "engine_running": engine_running,
         "upload_path": upload_path,
     }
@@ -95,12 +122,8 @@ def login():
         password = request.form.get("password", "")
         user = store.authenticate_user(username, password)
         if user:
-            session["user"] = user["username"]
-            session["user_id"] = user["id"]
-            session["is_admin"] = bool(user["is_admin"])
+            _set_login_session(user)
             nxt = request.args.get("next") or url_for("dashboard")
-            if user["is_admin"] and not request.args.get("next"):
-                nxt = url_for("users")
             return redirect(nxt)
         flash("登录名或密码错误", "error")
     return render_template("login.html")
@@ -112,13 +135,28 @@ def logout():
     return redirect(url_for("login"))
 
 
-# ---------------- 管理员：用户管理 ----------------
+# ---------------- 用户管理 ----------------
 @app.route("/users", methods=["GET", "POST"])
-@admin_required
+@login_required
 def users():
     if request.method == "POST":
         action = request.form.get("action")
-        if action == "add":
+        if action == "switch":
+            target_id = request.form.get("user_id", "")
+            if not str(target_id).strip().isdigit():
+                flash("账号不存在", "error")
+                return redirect(url_for("users"))
+            user = store.get_user_by_id(target_id)
+            if not user:
+                flash("账号不存在", "error")
+                return redirect(url_for("users"))
+            if user["id"] == current_user_id():
+                flash("当前已经是这个账号", "success")
+                return redirect(url_for("users"))
+            _set_login_session(user)
+            flash(f"已切换到账号：{user['username']}", "success")
+            return redirect(url_for("dashboard"))
+        elif action == "add":
             ok, msg = store.create_user(
                 request.form.get("username", ""),
                 request.form.get("password", ""),
@@ -127,20 +165,22 @@ def users():
         elif action == "delete":
             target_id = request.form.get("user_id", "")
             if str(target_id) == str(session.get("user_id")):
-                flash("不能删除当前登录的管理员", "error")
+                flash("不能删除当前登录账号", "error")
             else:
                 engine.stop_user(target_id)
                 ok, msg = store.delete_user(target_id)
                 flash(msg, "success" if ok else "error")
         elif action == "reset_password":
-            ok, msg = store.reset_user_password(
-                request.form.get("user_id", ""),
-                request.form.get("password", ""),
-            )
+            target_id = request.form.get("user_id", "")
+            target_user = store.get_user_by_id(target_id) if str(target_id).strip().isdigit() else None
+            if not target_user or target_user["username"] != config.ADMIN_USERNAME:
+                ok, msg = False, "只有默认 admin 账号需要重置密码"
+            else:
+                ok, msg = store.reset_user_password(target_id, request.form.get("password", ""))
             flash(msg, "success" if ok else "error")
         return redirect(url_for("users"))
 
-    return render_template("users.html", users=store.list_users())
+    return render_template("users.html", users=store.list_users(), initial_username=config.ADMIN_USERNAME)
 
 
 # ---------------- 仪表盘 ----------------
@@ -148,10 +188,33 @@ def users():
 @login_required
 def dashboard():
     uid = current_user_id()
+    record_types = _selected_message_record_types()
+    record_total = store.count_message_records(uid, record_types)
+    total_pages = max(1, (record_total + MESSAGE_RECORD_PAGE_SIZE - 1) // MESSAGE_RECORD_PAGE_SIZE)
+    page = min(_positive_int_arg("page", 1), total_pages)
+    offset = (page - 1) * MESSAGE_RECORD_PAGE_SIZE
+    prev_page = max(1, page - 1)
+    next_page = min(total_pages, page + 1)
+    record_pagination = {
+        "page": page,
+        "page_size": MESSAGE_RECORD_PAGE_SIZE,
+        "total": record_total,
+        "total_pages": total_pages,
+        "has_prev": page > 1,
+        "has_next": page < total_pages,
+        "prev_url": _dashboard_record_url(prev_page, record_types),
+        "next_url": _dashboard_record_url(next_page, record_types),
+        "current_url": _dashboard_record_url(page, record_types),
+    }
     return render_template(
         "dashboard.html",
         stats=store.counts(uid),
-        message_records=store.recent_message_records(uid, 50),
+        message_records=store.recent_message_records(
+            uid, MESSAGE_RECORD_PAGE_SIZE, offset, record_types
+        ),
+        record_types=MESSAGE_RECORD_TYPES,
+        selected_record_types=record_types,
+        record_pagination=record_pagination,
         engine_status=current_engine().status(),
     )
 
@@ -161,7 +224,7 @@ def dashboard():
 def message_record_delete(record_id):
     store.delete_message_record(current_user_id(), record_id)
     flash("消息处理记录已删除", "success")
-    return redirect(url_for("dashboard"))
+    return _dashboard_redirect()
 
 
 @app.route("/message-records/delete-selected", methods=["POST"])
@@ -172,7 +235,7 @@ def message_records_delete_selected():
         flash(f"已删除 {deleted} 条消息处理记录", "success")
     else:
         flash("请先选择要删除的消息处理记录", "error")
-    return redirect(url_for("dashboard"))
+    return _dashboard_redirect()
 
 
 @app.route("/message-records/clear", methods=["POST"])
@@ -182,7 +245,7 @@ def message_records_clear():
     store.clear_message_records(uid)
     engine.clear_state(uid)
     flash("已清空全部消息处理记录", "success")
-    return redirect(url_for("dashboard"))
+    return _dashboard_redirect()
 
 
 # ---------------- 商品：查询（列表）----------------
@@ -546,7 +609,7 @@ def uploaded_file(filename):
     return send_from_directory(config.UPLOAD_DIR, filename)
 
 
-# ---------------- 账号管理 ----------------
+# ---------------- Discord 账号 ----------------
 @app.route("/accounts", methods=["GET", "POST"])
 @login_required
 def accounts():
@@ -588,6 +651,62 @@ def blocked_keyword_delete(keyword_id):
     store.delete_blocked_keyword(current_user_id(), keyword_id)
     flash("屏蔽关键字已删除", "success")
     return redirect(url_for("blocked_keywords"))
+
+
+# ---------------- 精确关键字回复 ----------------
+@app.route("/exact-keyword-replies", methods=["GET", "POST"])
+@login_required
+def exact_keyword_replies():
+    uid = current_user_id()
+    if request.method == "POST":
+        ok, msg = store.save_exact_keyword_reply(
+            uid,
+            request.form.get("keyword", ""),
+            request.form.get("reply_link", ""),
+        )
+        flash(msg, "success" if ok else "error")
+        return redirect(url_for("exact_keyword_replies"))
+    return render_template(
+        "exact_keyword_replies.html",
+        rules=store.list_exact_keyword_replies(uid),
+    )
+
+
+@app.route("/exact-keyword-replies/<int:rule_id>/delete", methods=["POST"])
+@login_required
+def exact_keyword_reply_delete(rule_id):
+    store.delete_exact_keyword_reply(current_user_id(), rule_id)
+    flash("精确关键字回复已删除", "success")
+    return redirect(url_for("exact_keyword_replies"))
+
+
+@app.route("/exact-keyword-replies/export")
+@login_required
+def exact_keyword_replies_export():
+    text = store.exact_keyword_replies_export_text(current_user_id())
+    buffer = io.BytesIO(text.encode("utf-8"))
+    buffer.seek(0)
+    filename = f"exact_keyword_replies_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+    return send_file(buffer, mimetype="text/plain; charset=utf-8", as_attachment=True, download_name=filename)
+
+
+@app.route("/exact-keyword-replies/import", methods=["POST"])
+@login_required
+def exact_keyword_replies_import():
+    file = request.files.get("rules_file")
+    if not file or not file.filename:
+        flash("请选择 txt 文件", "error")
+        return redirect(url_for("exact_keyword_replies"))
+    if not file.filename.lower().endswith(".txt"):
+        flash("只支持上传 txt 文件", "error")
+        return redirect(url_for("exact_keyword_replies"))
+    text = file.read().decode("utf-8-sig", errors="replace")
+    imported, skipped = store.import_exact_keyword_replies(current_user_id(), text)
+    if imported:
+        flash(f"已导入/更新 {imported} 条精确关键字回复，跳过 {skipped} 条", "success")
+    else:
+        flash("没有导入有效规则，请检查 txt 格式", "error")
+    return redirect(url_for("exact_keyword_replies"))
 
 
 # ---------------- 系统配置（与 reply.py 等价的全部配置）----------------
@@ -656,6 +775,35 @@ def engine_replied_clear():
 
 
 # ---------------- 测试匹配（演示商品名相似匹配 + 图片识别）----------------
+def _blocked_match_result(keyword, source="text", ocr_error=""):
+    return {
+        "type": "blocked",
+        "product": None,
+        "link": "",
+        "distance": None,
+        "similarity": None,
+        "blocked_keyword": keyword,
+        "blocked_source": source,
+        "ocr_error": ocr_error,
+    }
+
+
+def _image_text_blocked_result(uid, image_bytes):
+    settings = store.get_settings(uid)
+    if settings.get("IMAGE_OCR_FILTER_ENABLED", "0") != "1" or not image_bytes:
+        return None, ""
+
+    result = image_text_filter.find_blocked_keyword_in_images(
+        uid,
+        image_bytes,
+        languages=settings.get("IMAGE_OCR_LANGUAGES", "eng") or "eng",
+    )
+    ocr_error = "; ".join(result.get("errors", []))
+    if result.get("keyword"):
+        return _blocked_match_result(result["keyword"], "image_ocr", ocr_error), ocr_error
+    return None, ocr_error
+
+
 @app.route("/test", methods=["GET", "POST"])
 @login_required
 def test_match():
@@ -669,16 +817,12 @@ def test_match():
         uid = current_user_id()
         blocked_keyword = store.find_blocked_keyword(uid, text)
         if blocked_keyword:
-            result = {
-                "type": "blocked",
-                "product": None,
-                "link": "",
-                "distance": None,
-                "similarity": None,
-                "blocked_keyword": blocked_keyword,
-            }
+            result = _blocked_match_result(blocked_keyword)
         else:
-            result = matcher.match(content=text, image_bytes=image_bytes, source="web-test", user_id=uid)
+            result, ocr_error = _image_text_blocked_result(uid, image_bytes)
+            if not result:
+                result = matcher.match(content=text, image_bytes=image_bytes, source="web-test", user_id=uid)
+                result["ocr_error"] = ocr_error
     return render_template("test.html", result=result)
 
 
@@ -701,11 +845,25 @@ def api_match():
             "distance": None,
             "similarity": None,
             "blocked_keyword": blocked_keyword,
+            "blocked_source": "text",
         })
     image_bytes = [
         file.read() for file in request.files.getlist("image")
         if file and file.filename
     ]
+    blocked_result, ocr_error = _image_text_blocked_result(uid, image_bytes)
+    if blocked_result:
+        return jsonify({
+            "type": "blocked",
+            "link": "",
+            "code": None,
+            "name": None,
+            "distance": None,
+            "similarity": None,
+            "blocked_keyword": blocked_result["blocked_keyword"],
+            "blocked_source": blocked_result["blocked_source"],
+            "ocr_error": blocked_result.get("ocr_error", ""),
+        })
     result = matcher.match(content=text, image_bytes=image_bytes, source="api", user_id=uid)
     return jsonify({
         "type": result["type"],
@@ -714,6 +872,7 @@ def api_match():
         "name": result["product"]["name"] if result["product"] else None,
         "distance": result["distance"],
         "similarity": result.get("similarity"),
+        "ocr_error": ocr_error,
     })
 
 

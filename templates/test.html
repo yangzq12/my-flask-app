@@ -32,12 +32,19 @@
   <h2>匹配结果</h2>
   <div class="result-box">
     <p>匹配类型：
-      {% if result.type=='keyword' %}<span class="tag kw">商品名相似匹配</span>
+      {% if result.type=='exact_keyword' %}<span class="tag kw">精确关键字匹配：{{ result.exact_keyword }}</span>
+      {% elif result.type=='keyword' %}<span class="tag kw">商品名相似匹配</span>
       {% elif result.type=='image' %}<span class="tag img">图片识别命中（汉明距离 {{ result.distance }}，相似度 {{ result.similarity }}）</span>
-      {% elif result.type=='blocked' %}<span class="tag off">屏蔽关键字命中：{{ result.blocked_keyword }}</span>
+      {% elif result.type=='blocked' %}
+        <span class="tag off">
+          {% if result.blocked_source=='image_ocr' %}图片文字屏蔽关键字命中{% else %}屏蔽关键字命中{% endif %}：{{ result.blocked_keyword }}
+        </span>
       {% elif result.type=='shop' %}<span class="tag shop">未命中，回退店铺信息</span>
       {% else %}<span class="tag off">无</span>{% endif %}
     </p>
+    {% if result.ocr_error %}
+      <p><span class="tag off">图片文字识别提示：{{ result.ocr_error }}</span></p>
+    {% endif %}
     {% if result.product %}
       <p>命中商品：<span class="code">{{ result.product['code'] }}</span> — {{ result.product['name'] }}</p>
     {% endif %}

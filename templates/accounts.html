@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% set active = 'accounts' %}
-{% block title %}账号管理{% endblock %}
-{% block page_title %}账号管理{% endblock %}
+{% block title %}Discord 账号{% endblock %}
+{% block page_title %}Discord 账号{% endblock %}
 
 {% block content %}
 <div class="card" style="max-width:720px;">
@@ -19,15 +19,15 @@
         <input type="text" name="token" placeholder="Discord 用户 token" required>
       </div>
     </div>
-    <button class="btn" type="submit">添加账号</button>
+    <button class="btn" type="submit">添加 Discord 账号</button>
   </form>
 </div>
 
 <div class="card">
-  <h2>账号列表</h2>
+  <h2>Discord 账号列表</h2>
   {% if accounts %}
   <table>
-    <thead><tr><th>账号名</th><th>状态</th><th>Token(脱敏)</th><th>下次可用</th><th>上次使用</th><th>失效信息</th><th>操作</th></tr></thead>
+    <thead><tr><th>账号名</th><th>状态</th><th>Token</th><th>下次可用</th><th>上次使用</th><th>失效信息</th><th>操作</th></tr></thead>
     <tbody>
       {% for a in accounts %}
       <tr>
@@ -36,7 +36,7 @@
           {% if a['status']=='invalid' %}<span class="tag off">失效</span>
           {% else %}<span class="tag">有效</span>{% endif %}
         </td>
-        <td><span class="code">{{ a['token'][:8] }}…{{ a['token'][-4:] if a['token']|length > 12 else '' }}</span></td>
+        <td style="max-width:420px;word-break:break-all;"><span class="code">{{ a['token'] }}</span></td>
         <td>
           {% if a['status']=='invalid' %}不可用
           {% else %}{{ '空闲' if a['next_available_time']|float <= 0 else (a['next_available_time']|float)|round(0)|int }}{% endif %}
@@ -59,7 +59,7 @@
     </tbody>
   </table>
   {% else %}
-  <div class="empty">暂无账号，请先添加</div>
+  <div class="empty">暂无 Discord 账号，请先添加</div>
   {% endif %}
 </div>
 {% endblock %}

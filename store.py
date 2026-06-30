@@ -17,6 +17,7 @@ from config import ADMIN_PASSWORD, ADMIN_USERNAME, DB_PATH, PRODUCT_MAP_FILE, DE
 _DEFAULT_USER_ID = None
 _PRODUCT_CACHE_VERSION = {}
 _BLOCKED_KEYWORDS_CACHE = {}
+_EXACT_KEYWORD_REPLY_CACHE = {}
 
 
 def _normalize_user_id(user_id):
@@ -36,6 +37,10 @@ def _bump_product_cache_version(user_id=None):
 
 def _bump_blocked_keywords_cache(user_id=None):
     _BLOCKED_KEYWORDS_CACHE.pop(_normalize_user_id(user_id), None)
+
+
+def _bump_exact_keyword_reply_cache(user_id=None):
+    _EXACT_KEYWORD_REPLY_CACHE.pop(_normalize_user_id(user_id), None)
 
 
 def _ensure_dirs():
@@ -234,6 +239,25 @@ def _create_blocked_keywords_table(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_blocked_keywords_user ON blocked_keywords(user_id)")
 
 
+def _create_exact_keyword_replies_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS exact_keyword_replies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            keyword TEXT NOT NULL,
+            keyword_norm TEXT NOT NULL,
+            reply_link TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+            UNIQUE(user_id, keyword_norm)
+        )""")
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_exact_keyword_replies_user
+        ON exact_keyword_replies(user_id)
+        """)
+
+
 def _create_match_logs_table(conn):
     conn.execute("""
         CREATE TABLE IF NOT EXISTS match_logs (
@@ -289,6 +313,7 @@ def _create_message_records_table(conn):
             source TEXT NOT NULL DEFAULT 'discord',
             channel_id TEXT NOT NULL DEFAULT '',
             message_id TEXT NOT NULL DEFAULT '',
+            message_url TEXT NOT NULL DEFAULT '',
             author_id TEXT NOT NULL DEFAULT '',
             username TEXT NOT NULL DEFAULT '',
             user_content TEXT NOT NULL DEFAULT '',
@@ -312,6 +337,14 @@ def _create_message_records_table(conn):
         CREATE INDEX IF NOT EXISTS idx_message_records_message
         ON message_records(user_id, channel_id, message_id)
         """)
+
+
+def _ensure_message_records_columns(conn):
+    if not _table_exists(conn, "message_records"):
+        return
+    cols = _columns(conn, "message_records")
+    if "message_url" not in cols:
+        conn.execute("ALTER TABLE message_records ADD COLUMN message_url TEXT NOT NULL DEFAULT ''")
 
 
 def _rebuild_table(conn, table, create_fn, copy_sql):
@@ -394,6 +427,25 @@ def _migrate_user_scoped_tables(conn, admin_id):
             SELECT id, {admin_id}, keyword, keyword_norm, created_at FROM {{old}}
         """)
 
+    if not _table_exists(conn, "exact_keyword_replies"):
+        _create_exact_keyword_replies_table(conn)
+    elif "user_id" in _columns(conn, "exact_keyword_replies"):
+        _create_exact_keyword_replies_table(conn)
+    else:
+        cols = _columns(conn, "exact_keyword_replies")
+        keyword_norm_expr = "keyword_norm" if "keyword_norm" in cols else "keyword"
+        reply_expr = "reply_link" if "reply_link" in cols else "''"
+        updated_at_expr = "updated_at" if "updated_at" in cols else "created_at"
+        _rebuild_table(conn, "exact_keyword_replies", _create_exact_keyword_replies_table, f"""
+            INSERT OR IGNORE INTO exact_keyword_replies(
+                id, user_id, keyword, keyword_norm, reply_link, created_at, updated_at
+            )
+            SELECT id, {admin_id}, keyword, {keyword_norm_expr},
+                   COALESCE({reply_expr}, ''), created_at,
+                   COALESCE({updated_at_expr}, created_at)
+            FROM {{old}}
+        """)
+
     if not _table_exists(conn, "match_logs") or "user_id" in _columns(conn, "match_logs"):
         _create_match_logs_table(conn)
     else:
@@ -426,6 +478,7 @@ def _migrate_user_scoped_tables(conn, admin_id):
 
     if not _table_exists(conn, "message_records") or "user_id" in _columns(conn, "message_records"):
         _create_message_records_table(conn)
+        _ensure_message_records_columns(conn)
     else:
         _rebuild_table(conn, "message_records", _create_message_records_table, f"""
             INSERT OR IGNORE INTO message_records(
@@ -440,13 +493,14 @@ def _migrate_user_scoped_tables(conn, admin_id):
                    account_name, skip_reason, created_at, updated_at
             FROM {{old}}
         """)
+        _ensure_message_records_columns(conn)
 
     conn.commit()
     conn.execute("PRAGMA foreign_keys=ON;")
 
 
 def init_db():
-    """建表 + 写入默认设置 + 初始化固定管理员账号。"""
+    """建表 + 写入默认设置 + 初始化默认登录账号。"""
     global _DEFAULT_USER_ID
     with get_conn() as conn:
         _create_users_table(conn)
@@ -532,7 +586,7 @@ def list_users():
                       (SELECT COUNT(*) FROM products p WHERE p.user_id=u.id) AS product_count,
                       (SELECT COUNT(*) FROM accounts a WHERE a.user_id=u.id) AS account_count
                FROM users u
-               ORDER BY u.is_admin DESC, u.id"""
+               ORDER BY u.id"""
         ).fetchall()
 
 
@@ -541,8 +595,6 @@ def create_user(username, password):
     password = password or ""
     if not username:
         return False, "用户名不能为空"
-    if username == ADMIN_USERNAME:
-        return False, "该用户名为固定管理员账号"
     if len(username) > 80:
         return False, "用户名不能超过 80 个字符"
     if len(password) < 6:
@@ -561,12 +613,11 @@ def create_user(username, password):
 
 
 def delete_user(user_id):
+    global _DEFAULT_USER_ID
     user_id = _normalize_user_id(user_id)
     user = get_user_by_id(user_id)
     if not user:
         return False, "用户不存在"
-    if user["is_admin"]:
-        return False, "不能删除管理员用户"
     with get_conn() as conn:
         product_ids = [r["id"] for r in conn.execute(
             "SELECT id FROM products WHERE user_id=?", (user_id,)
@@ -576,12 +627,16 @@ def delete_user(user_id):
             conn.execute(f"DELETE FROM product_images WHERE product_id IN ({placeholders})", product_ids)
         for table in (
             "message_records", "replied_messages", "match_logs", "blocked_keywords",
+            "exact_keyword_replies",
             "accounts", "settings", "products",
         ):
             conn.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
         conn.execute("DELETE FROM users WHERE id=?", (user_id,))
     _PRODUCT_CACHE_VERSION.pop(user_id, None)
     _BLOCKED_KEYWORDS_CACHE.pop(user_id, None)
+    _EXACT_KEYWORD_REPLY_CACHE.pop(user_id, None)
+    if _DEFAULT_USER_ID == user_id:
+        _DEFAULT_USER_ID = None
     return True, "用户已删除"
 
 
@@ -593,8 +648,6 @@ def reset_user_password(user_id, password):
         row = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
         if not row:
             return False, "用户不存在"
-        if row["is_admin"]:
-            return False, "管理员账号密码由固定配置控制"
         conn.execute(
             "UPDATE users SET password_hash=? WHERE id=?",
             (generate_password_hash(password), user_id),
@@ -612,8 +665,6 @@ def change_credentials(user_id, new_username, new_password):
     user = get_user_by_id(user_id)
     if not user:
         return False, "用户不存在"
-    if user["is_admin"]:
-        return False, "管理员账号由固定配置控制，不能在这里修改"
     try:
         with get_conn() as conn:
             conn.execute(
@@ -693,19 +744,141 @@ def delete_blocked_keyword(user_id, keyword_id):
     _bump_blocked_keywords_cache(user_id)
 
 
-def find_blocked_keyword(user_id, text):
+def _cached_blocked_keywords(user_id):
     user_id = _normalize_user_id(user_id)
-    text_norm = _keyword_norm(text)
-    if not text_norm:
-        return None
     if user_id not in _BLOCKED_KEYWORDS_CACHE:
         _BLOCKED_KEYWORDS_CACHE[user_id] = [
             (row["keyword"], row["keyword_norm"]) for row in list_blocked_keywords(user_id)
         ]
-    for keyword, keyword_norm in _BLOCKED_KEYWORDS_CACHE[user_id]:
+    return _BLOCKED_KEYWORDS_CACHE[user_id]
+
+
+def has_blocked_keywords(user_id):
+    return bool(_cached_blocked_keywords(user_id))
+
+
+def find_blocked_keyword(user_id, text):
+    text_norm = _keyword_norm(text)
+    if not text_norm:
+        return None
+    for keyword, keyword_norm in _cached_blocked_keywords(user_id):
         if keyword_norm and keyword_norm in text_norm:
             return keyword
     return None
+
+
+# ---------------- 精确关键字回复 ----------------
+def _exact_keyword_norm(keyword):
+    return " ".join((keyword or "").strip().casefold().split())
+
+
+def list_exact_keyword_replies(user_id=None):
+    user_id = _normalize_user_id(user_id)
+    with get_conn() as conn:
+        return conn.execute(
+            """SELECT * FROM exact_keyword_replies
+               WHERE user_id=?
+               ORDER BY id DESC""",
+            (user_id,),
+        ).fetchall()
+
+
+def save_exact_keyword_reply(user_id, keyword, reply_link):
+    user_id = _normalize_user_id(user_id)
+    keyword = (keyword or "").strip()
+    reply_link = (reply_link or "").strip()
+    keyword_norm = _exact_keyword_norm(keyword)
+    if not keyword_norm:
+        return False, "精确匹配关键字不能为空"
+    if not reply_link:
+        return False, "回复链接不能为空"
+    if len(keyword) > 200:
+        return False, "精确匹配关键字不能超过 200 个字符"
+    if len(reply_link) > 1000:
+        return False, "回复链接不能超过 1000 个字符"
+    now = _now()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO exact_keyword_replies(
+                   user_id, keyword, keyword_norm, reply_link, created_at, updated_at
+               )
+               VALUES(?,?,?,?,?,?)
+               ON CONFLICT(user_id, keyword_norm) DO UPDATE SET
+                   keyword=excluded.keyword,
+                   reply_link=excluded.reply_link,
+                   updated_at=excluded.updated_at""",
+            (user_id, keyword, keyword_norm, reply_link, now, now),
+        )
+    _bump_exact_keyword_reply_cache(user_id)
+    return True, "精确关键字回复已保存"
+
+
+def delete_exact_keyword_reply(user_id, rule_id):
+    user_id = _normalize_user_id(user_id)
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM exact_keyword_replies WHERE user_id=? AND id=?",
+            (user_id, rule_id),
+        )
+    _bump_exact_keyword_reply_cache(user_id)
+
+
+def match_exact_keyword_reply(user_id, text):
+    user_id = _normalize_user_id(user_id)
+    text_norm = _exact_keyword_norm(text)
+    if not text_norm:
+        return None
+    if user_id not in _EXACT_KEYWORD_REPLY_CACHE:
+        rows = [dict(row) for row in list_exact_keyword_replies(user_id)]
+        _EXACT_KEYWORD_REPLY_CACHE[user_id] = sorted(
+            rows,
+            key=lambda row: (len(row["keyword_norm"]), row["id"]),
+            reverse=True,
+        )
+    for row in _EXACT_KEYWORD_REPLY_CACHE[user_id]:
+        keyword_norm = row["keyword_norm"]
+        if keyword_norm and keyword_norm in text_norm:
+            return row
+    return None
+
+
+def _parse_exact_keyword_reply_line(line):
+    raw = (line or "").strip()
+    if not raw or raw.startswith("#"):
+        return None, None
+    if "\t" in raw:
+        keyword, reply_link = raw.split("\t", 1)
+    elif "," in raw:
+        keyword, reply_link = raw.split(",", 1)
+    else:
+        return raw, ""
+    return keyword.strip(), reply_link.strip()
+
+
+def import_exact_keyword_replies(user_id, text):
+    user_id = _normalize_user_id(user_id)
+    added_or_updated = 0
+    skipped = 0
+    for line in (text or "").splitlines():
+        keyword, reply_link = _parse_exact_keyword_reply_line(line)
+        if keyword is None:
+            continue
+        ok, _msg = save_exact_keyword_reply(user_id, keyword, reply_link)
+        if ok:
+            added_or_updated += 1
+        else:
+            skipped += 1
+    return added_or_updated, skipped
+
+
+def exact_keyword_replies_export_text(user_id=None):
+    rows = list_exact_keyword_replies(user_id)
+    lines = ["# 每行格式：关键字<TAB>回复链接"]
+    for row in rows:
+        keyword = str(row["keyword"]).replace("\t", " ").replace("\r", " ").replace("\n", " ")
+        reply_link = str(row["reply_link"]).replace("\t", " ").replace("\r", " ").replace("\n", " ")
+        lines.append(f"{keyword}\t{reply_link}")
+    return "\n".join(lines) + "\n"
 
 
 # ---------------- 商品 ----------------
@@ -998,24 +1171,36 @@ def has_replied_message(user_id, channel_id, message_id):
     return bool(row)
 
 
+def discord_message_url(channel_id, message_id, guild_id=None):
+    channel_id = str(channel_id or "").strip()
+    message_id = str(message_id or "").strip()
+    if not channel_id or not message_id:
+        return ""
+    guild_part = str(guild_id or "").strip() or "@me"
+    return f"https://discord.com/channels/{guild_part}/{channel_id}/{message_id}"
+
+
 def log_message_record(
     user_id, channel_id, message_id, author_id, username, user_content, had_image,
     image_urls, reply_content, reply_mode, reply_channel_id, account_name,
-    match_type, matched_code, matched_link, reply_status, skip_reason="",
+    match_type, matched_code, matched_link, reply_status, skip_reason="", message_url="",
 ):
     user_id = _normalize_user_id(user_id)
     now = _now()
+    message_url = (message_url or discord_message_url(channel_id, message_id))[:500]
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO message_records(
-                   user_id, source, channel_id, message_id, author_id, username, user_content,
+                   user_id, source, channel_id, message_id, message_url,
+                   author_id, username, user_content,
                    had_image, image_urls, match_type, matched_code, matched_link,
                    reply_content, reply_status, reply_mode, reply_channel_id, account_name,
                    skip_reason, created_at, updated_at
                )
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(user_id, channel_id, message_id) DO UPDATE SET
                    source=excluded.source,
+                   message_url=excluded.message_url,
                    author_id=excluded.author_id,
                    username=excluded.username,
                    user_content=excluded.user_content,
@@ -1036,6 +1221,7 @@ def log_message_record(
                 "discord",
                 str(channel_id or ""),
                 str(message_id or ""),
+                message_url,
                 str(author_id or ""),
                 username or "",
                 (user_content or "")[:1000],
@@ -1059,43 +1245,67 @@ def log_message_record(
 def log_replied_message(
     user_id, channel_id, message_id, author_id, username, user_content, had_image,
     image_urls, reply_content, reply_mode, reply_channel_id, account_name,
-    match_type, matched_code, matched_link,
+    match_type, matched_code, matched_link, message_url="",
 ):
     log_message_record(
         user_id, channel_id, message_id, author_id, username, user_content, had_image,
         image_urls, reply_content, reply_mode, reply_channel_id, account_name,
-        match_type, matched_code, matched_link, "sent",
+        match_type, matched_code, matched_link, "sent", message_url=message_url,
     )
 
 
-def recent_message_records(user_id=None, limit=50):
+MESSAGE_RECORD_TYPE_SQL = {
+    "matched": "match_type IN ('exact_keyword', 'keyword', 'image')",
+    "unmatched": "match_type IN ('none', 'shop')",
+    "skipped": "(match_type='skipped' OR reply_status='skipped')",
+}
+
+
+def _message_record_where(user_id, record_types=None):
+    clauses = ["user_id=?"]
+    params = [user_id]
+    if record_types is not None:
+        type_clauses = [
+            MESSAGE_RECORD_TYPE_SQL[t]
+            for t in record_types
+            if t in MESSAGE_RECORD_TYPE_SQL
+        ]
+        clauses.append(f"({' OR '.join(type_clauses)})" if type_clauses else "0=1")
+    return " WHERE " + " AND ".join(clauses), params
+
+
+def _positive_int(value, default, minimum=0):
+    try:
+        n = int(value)
+        return n if n >= minimum else default
+    except (TypeError, ValueError):
+        return default
+
+
+def recent_message_records(user_id=None, limit=50, offset=0, record_types=None):
     user_id = _normalize_user_id(user_id)
+    limit = _positive_int(limit, 50, minimum=1)
+    offset = _positive_int(offset, 0, minimum=0)
+    where_sql, params = _message_record_where(user_id, record_types)
     with get_conn() as conn:
         return conn.execute(
-            "SELECT * FROM message_records WHERE user_id=? ORDER BY id DESC LIMIT ?",
-            (user_id, limit),
+            f"SELECT * FROM message_records{where_sql} ORDER BY id DESC LIMIT ? OFFSET ?",
+            params + [limit, offset],
         ).fetchall()
 
 
-def count_message_records(user_id=None):
+def count_message_records(user_id=None, record_types=None):
     user_id = _normalize_user_id(user_id)
+    where_sql, params = _message_record_where(user_id, record_types)
     with get_conn() as conn:
         return conn.execute(
-            "SELECT COUNT(*) AS n FROM message_records WHERE user_id=?", (user_id,)
+            f"SELECT COUNT(*) AS n FROM message_records{where_sql}", params
         ).fetchone()["n"]
 
 
 def prune_message_records(user_id=None, max_rows=3000):
     user_id = _normalize_user_id(user_id)
-
-    def positive_int(value, default):
-        try:
-            n = int(value)
-            return n if n >= 0 else default
-        except (TypeError, ValueError):
-            return default
-
-    max_rows = positive_int(max_rows, 3000)
+    max_rows = _positive_int(max_rows, 3000)
     deleted = 0
     with get_conn() as conn:
         if max_rows > 0:

@@ -21,9 +21,11 @@
     <a class="nav-item {{ 'active' if active=='dashboard' }}" href="{{ url_for('dashboard') }}">
       <span class="ico">📊</span> 仪表盘</a>
     <a class="nav-item {{ 'active' if active=='accounts' }}" href="{{ url_for('accounts') }}">
-      <span class="ico">👤</span> 账号管理</a>
+      <span class="ico">👤</span> Discord 账号</a>
     <a class="nav-item {{ 'active' if active=='blocked_keywords' }}" href="{{ url_for('blocked_keywords') }}">
       <span class="ico">🚫</span> 屏蔽关键字</a>
+    <a class="nav-item {{ 'active' if active=='exact_keyword_replies' }}" href="{{ url_for('exact_keyword_replies') }}">
+      <span class="ico">🎯</span> 精确回复</a>
     <a class="nav-item {{ 'active' if active=='settings' }}" href="{{ url_for('settings') }}">
       <span class="ico">⚙️</span> 系统配置</a>
     <a class="nav-item {{ 'active' if active=='engine' }}" href="{{ url_for('engine_page') }}">
@@ -31,11 +33,9 @@
     <a class="nav-item {{ 'active' if active=='test' }}" href="{{ url_for('test_match') }}">
       <span class="ico">🧪</span> 测试匹配</a>
 
-    {% if is_admin %}
-    <div class="nav-group-title">管理员</div>
+    <div class="nav-group-title">用户</div>
     <a class="nav-item {{ 'active' if active=='users' }}" href="{{ url_for('users') }}">
       <span class="ico">👥</span> 用户管理</a>
-    {% endif %}
   </aside>
 
   <div class="main">

@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% set active = 'exact_keyword_replies' %}
+{% block title %}精确回复{% endblock %}
+{% block page_title %}精确回复{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:820px;">
+  <h2>添加精确关键字回复</h2>
+  <div class="sub">用户消息文字包含关键字时，直接回复这里配置的链接；英文大小写不敏感，连续空白会视为一个空格，多条命中时优先使用更长的关键字。</div>
+  <form method="post">
+    <div class="grid2">
+      <div class="form-row">
+        <label>匹配关键字 <span class="req">*</span></label>
+        <input type="text" name="keyword" placeholder="如 Adidas shorts black" required>
+      </div>
+      <div class="form-row">
+        <label>回复店铺链接 <span class="req">*</span></label>
+        <input type="text" name="reply_link" placeholder="https://你的店铺地址.com/..." required>
+      </div>
+    </div>
+    <button class="btn" type="submit">保存规则</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="toolbar">
+    <div>
+      <h2 style="margin:0;">批量配置</h2>
+      <div class="hint">txt 每行一条：关键字 + Tab + 回复链接；重复关键字会更新回复链接。</div>
+    </div>
+    <div class="toolbar-actions">
+      <a class="btn btn-secondary" href="{{ url_for('exact_keyword_replies_export') }}">下载 txt</a>
+      <form method="post" action="{{ url_for('exact_keyword_replies_import') }}" enctype="multipart/form-data" class="inline-import-form">
+        <label class="btn btn-secondary">
+          上传 txt
+          <input class="file-picker-hidden" type="file" name="rules_file" accept=".txt,text/plain"
+                 onchange="if (this.files.length && confirm('导入 txt 会新增或更新同名关键字的回复链接，继续？')) { this.form.submit(); } else { this.value = ''; }">
+        </label>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>已配置的精确回复</h2>
+  {% if rules %}
+  <table>
+    <thead>
+      <tr><th>关键字</th><th>回复链接</th><th>更新时间</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+      {% for item in rules %}
+      <tr>
+        <td><span class="code">{{ item['keyword'] }}</span></td>
+        <td style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+          <a class="message-link" href="{{ item['reply_link'] }}" target="_blank" rel="noopener noreferrer">
+            {{ item['reply_link'] }}
+          </a>
+        </td>
+        <td>{{ item['updated_at'] }}</td>
+        <td>
+          <form method="post" action="{{ url_for('exact_keyword_reply_delete', rule_id=item['id']) }}"
+                style="display:inline"
+                onsubmit="return confirm({{ ('删除精确回复「' ~ item['keyword'] ~ '」？')|tojson|forceescape }});">
+            <button class="btn btn-sm btn-danger" type="submit">删除</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">暂无精确关键字回复</div>
+  {% endif %}
+</div>
+{% endblock %}

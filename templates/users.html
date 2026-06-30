@@ -4,6 +4,30 @@
 {% block page_title %}用户管理{% endblock %}
 
 {% block content %}
+<div class="card">
+  <h2>直接切换账号</h2>
+  {% if users %}
+  <div class="switch-account-grid">
+    {% for u in users %}
+    <form method="post" class="switch-account-item">
+      <input type="hidden" name="action" value="switch">
+      <input type="hidden" name="user_id" value="{{ u['id'] }}">
+      <div>
+        <div class="switch-account-name">
+          {{ u['username'] }}
+          {% if u['id'] == current_user_id %}<span class="tag kw">当前</span>{% endif %}
+        </div>
+        <div class="hint">商品 {{ u['product_count'] }} · Discord 账号 {{ u['account_count'] }}</div>
+      </div>
+      <button class="btn btn-sm" type="submit" {{ 'disabled' if u['id'] == current_user_id }}>切换</button>
+    </form>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty">暂无用户</div>
+  {% endif %}
+</div>
+
 <div class="card" style="max-width:760px;">
   <h2>添加用户</h2>
   <div class="sub">用户创建后会拥有独立的商品、Discord 账号、系统配置、屏蔽关键字、消息记录和监听引擎</div>
@@ -29,33 +53,37 @@
   <table>
     <thead>
       <tr>
-        <th>ID</th><th>用户名</th><th>角色</th><th>商品数</th><th>Discord 账号</th><th>创建时间</th><th>操作</th>
+        <th>ID</th><th>用户名</th><th>商品数</th><th>Discord 账号</th><th>创建时间</th><th>操作</th>
       </tr>
     </thead>
     <tbody>
       {% for u in users %}
       <tr>
         <td>{{ u['id'] }}</td>
-        <td>{{ u['username'] }}</td>
-        <td>{% if u['is_admin'] %}<span class="tag">管理员</span>{% else %}<span class="tag off">用户</span>{% endif %}</td>
+        <td>
+          {{ u['username'] }}
+          {% if u['id'] == current_user_id %}<span class="tag kw">当前</span>{% endif %}
+        </td>
         <td>{{ u['product_count'] }}</td>
         <td>{{ u['account_count'] }}</td>
         <td>{{ u['created_at'] }}</td>
         <td>
-          {% if not u['is_admin'] %}
+          {% if u['username'] == initial_username %}
           <form method="post" style="display:inline-flex; gap:6px; align-items:center;">
             <input type="hidden" name="action" value="reset_password">
             <input type="hidden" name="user_id" value="{{ u['id'] }}">
             <input type="password" name="password" placeholder="新密码" style="width:120px; padding:6px 8px;">
             <button class="btn btn-sm btn-secondary" type="submit">重置</button>
           </form>
+          {% endif %}
+          {% if u['id'] == current_user_id %}
+          <span class="hint">当前账号不可删除</span>
+          {% else %}
           <form method="post" style="display:inline" onsubmit="return confirm('删除用户 {{ u['username'] }} 及其全部数据？');">
             <input type="hidden" name="action" value="delete">
             <input type="hidden" name="user_id" value="{{ u['id'] }}">
             <button class="btn btn-sm btn-danger" type="submit">删除</button>
           </form>
-          {% else %}
-          <span class="hint">固定管理员</span>
           {% endif %}
         </td>
       </tr>

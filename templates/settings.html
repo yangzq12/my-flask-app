@@ -19,7 +19,7 @@
             <option value="reply" {{ 'selected' if settings.get(key, 'reply')=='reply' }}>直接回复</option>
             <option value="thread" {{ 'selected' if settings.get(key)=='thread' }}>线程回复</option>
           </select>
-        {% elif key in ['SKIP_CHINESE','SKIP_LINK_MSG','IMAGE_MATCH_ENABLED','MENTION_REPLIED_USER','REPLY_LOG_ENABLED'] %}
+        {% elif key in ['SKIP_CHINESE','SKIP_LINK_MSG','IMAGE_OCR_FILTER_ENABLED','IMAGE_MATCH_ENABLED','MENTION_REPLIED_USER','REPLY_LOG_ENABLED'] %}
           <select name="{{ key }}">
             <option value="1" {{ 'selected' if settings.get(key)=='1' }}>开启 (1)</option>
             <option value="0" {{ 'selected' if settings.get(key)=='0' }}>关闭 (0)</option>
@@ -34,23 +34,21 @@
   </form>
 </div>
 
-{% if not is_admin %}
-  <div class="card" style="max-width:820px;">
-    <h2>修改登录凭据</h2>
-    <div class="sub">留空则不修改。修改后需用新登录名/密码重新登录。</div>
-    <form method="post">
-      <div class="grid2">
-        <div class="form-row">
-          <label>新登录名</label>
-          <input type="text" name="new_username" placeholder="新的登录名">
-        </div>
-        <div class="form-row">
-          <label>新密码</label>
-          <input type="password" name="new_password" placeholder="新的密码">
-        </div>
+<div class="card" style="max-width:820px;">
+  <h2>修改登录凭据</h2>
+  <div class="sub">留空则不修改。修改后需用新登录名/密码重新登录。</div>
+  <form method="post">
+    <div class="grid2">
+      <div class="form-row">
+        <label>新登录名</label>
+        <input type="text" name="new_username" placeholder="新的登录名">
       </div>
-      <button class="btn btn-secondary" type="submit">更新登录凭据</button>
-    </form>
-  </div>
-{% endif %}
+      <div class="form-row">
+        <label>新密码</label>
+        <input type="password" name="new_password" placeholder="新的密码">
+      </div>
+    </div>
+    <button class="btn btn-secondary" type="submit">更新登录凭据</button>
+  </form>
+</div>
 {% endblock %}

@@ -23,8 +23,15 @@
 
     <div class="form-row">
       <label>商品链接</label>
-      <input type="text" name="link" value="{{ product['link'] if product else '' }}"
+      <input type="text" name="link" id="product_link" value="{{ product['link'] if product else '' }}"
              placeholder="请输入商品链接，如 https://weidian.com/item.html?itemID=7...">
+      <div class="link-converter-row">
+        <select id="link_convert_target" aria-label="选择转换目标">
+          <option value="oopbuy">Oopbuy</option>
+        </select>
+        <button class="btn btn-secondary btn-sm" type="button" id="link_convert_btn">转换链接</button>
+        <span class="hint" id="link_convert_status"></span>
+      </div>
     </div>
 
     <div class="form-row">
@@ -93,9 +100,37 @@
   const uploadInput = document.getElementById('image_upload_files');
   const preview = document.getElementById('selected_image_preview');
   const count = document.getElementById('selected_image_count');
+  const productLink = document.getElementById('product_link');
+  const linkConvertTarget = document.getElementById('link_convert_target');
+  const linkConvertBtn = document.getElementById('link_convert_btn');
+  const linkConvertStatus = document.getElementById('link_convert_status');
   const pendingFiles = [];
 
   function sync() { field.style.display = toggle.checked ? 'block' : 'none'; }
+
+  function extractWeidianItemId(rawUrl) {
+    const text = (rawUrl || '').trim();
+    if (!text) return '';
+    try {
+      const url = new URL(text);
+      return url.searchParams.get('itemID') || url.searchParams.get('itemId') || url.searchParams.get('itemid') || '';
+    } catch (err) {
+      const match = text.match(/[?&]itemID=(\d+)/i);
+      return match ? match[1] : '';
+    }
+  }
+
+  function convertProductLink() {
+    const itemId = extractWeidianItemId(productLink.value);
+    if (!itemId) {
+      linkConvertStatus.textContent = '未识别到 Weidian itemID';
+      return;
+    }
+    if (linkConvertTarget.value === 'oopbuy') {
+      productLink.value = `https://oopbuy.com/product/weidian/${itemId}`;
+      linkConvertStatus.textContent = '已转换';
+    }
+  }
 
   function fileKey(file) {
     return [file.name, file.size, file.lastModified].join(':');
@@ -143,6 +178,7 @@
   }
 
   toggle.addEventListener('change', sync);
+  linkConvertBtn.addEventListener('click', convertProductLink);
   pickBtn.addEventListener('click', () => picker.click());
   picker.addEventListener('change', () => {
     const file = picker.files && picker.files[0];

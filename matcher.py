@@ -1,7 +1,7 @@
 """匹配逻辑：商品名相似匹配 + 图片感知哈希匹配。
 
 对外主入口 match()：给定文本和/或图片字节，返回匹配结果 dict：
-  {type: 'keyword'|'image'|'shop'|'none', product: row|None, link: str}
+  {type: 'exact_keyword'|'keyword'|'image'|'shop'|'none', product: row|None, link: str}
 """
 import difflib
 import re
@@ -282,20 +282,37 @@ def match_image(image_bytes, threshold=None, user_id=None):
 
 # ---------------- 统一入口 ----------------
 def match(content="", image_bytes=None, source="web-test", record_match_log=True, user_id=None):
-    """综合匹配：先按商品名找最相近商品，未命中且有图片再图片匹配，仍未命中回退店铺信息。"""
+    """综合匹配：先精确关键字，再商品名，未命中且有图片再图片匹配，最后回退店铺信息。"""
     user_id = store.default_user_id() if user_id is None else int(user_id)
     settings = store.get_settings(user_id)
     content = (content or "").strip()
     image_list = _as_image_list(image_bytes)
-    result = {"type": "none", "product": None, "link": "", "distance": None, "similarity": None}
+    result = {
+        "type": "none",
+        "product": None,
+        "link": "",
+        "distance": None,
+        "similarity": None,
+        "exact_keyword": "",
+    }
 
-    # 1) 商品名相似匹配
+    # 1) 精确关键字回复
     if content:
+        rule = store.match_exact_keyword_reply(user_id, content)
+        if rule:
+            result.update(
+                type="exact_keyword",
+                link=rule["reply_link"],
+                exact_keyword=rule["keyword"],
+            )
+
+    # 2) 商品名相似匹配
+    if result["type"] == "none" and content:
         p = match_keyword(content, user_id=user_id)
         if p:
             result.update(type="keyword", product=p, link=p["link"])
 
-    # 2) 图片
+    # 3) 图片
     if result["type"] == "none" and image_list and settings.get("IMAGE_MATCH_ENABLED", "1") == "1":
         p, dist = match_image(
             image_list,
@@ -307,7 +324,7 @@ def match(content="", image_bytes=None, source="web-test", record_match_log=True
         if p:
             result.update(type="image", product=p, link=p["link"])
 
-    # 3) 回退店铺信息
+    # 4) 回退店铺信息
     if result["type"] == "none":
         shop_reply = f'{settings.get("CUSTOM_REPLY", "")}\n{settings.get("SHOP_WEBSITE", "")}'.strip()
         result.update(type="shop", link=shop_reply)
@@ -319,7 +336,7 @@ def match(content="", image_bytes=None, source="web-test", record_match_log=True
             query_text=content,
             had_image=bool(image_list),
             match_type=result["type"],
-            matched_code=result["product"]["code"] if result["product"] else "",
+            matched_code=result["product"]["code"] if result["product"] else result["exact_keyword"],
             matched_link=result["link"],
         )
     return result

@@ -20,6 +20,7 @@ import requests
 
 import store
 import matcher
+import image_text_filter
 
 CHINESE_RE = re.compile(r"[一-鿿]")
 PENDING_REPLY_EXPIRE = 3600
@@ -68,6 +69,8 @@ class BotEngine:
         self.log_lines = []          # 最近日志（环形）
         self._lock = threading.Lock()
         self._next_record_cleanup = 0
+        self._channel_guild_cache = {}
+        self._last_ocr_error = ""
 
     # ---------- 日志 ----------
     def log(self, msg):
@@ -122,6 +125,33 @@ class BotEngine:
         except (TypeError, ValueError):
             value = default
         return max(minimum, value)
+
+    def _channel_guild_id(self, channel_id, token):
+        channel_id = str(channel_id or "")
+        if not channel_id:
+            return ""
+        if channel_id in self._channel_guild_cache:
+            return self._channel_guild_cache[channel_id]
+        try:
+            resp = requests.get(
+                f"https://discord.com/api/v9/channels/{channel_id}",
+                headers={"Authorization": token, "User-Agent": "Mozilla/5.0"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json() if resp.content else {}
+                guild_id = str(data.get("guild_id") or "")
+                self._channel_guild_cache[channel_id] = guild_id
+                return guild_id
+        except Exception as e:
+            self.log(f"⚠️ 获取频道信息失败：{str(e)[:40]}")
+        return ""
+
+    def _message_url(self, msg, token):
+        channel_id = msg.get("channel_id")
+        message_id = msg.get("id")
+        guild_id = msg.get("guild_id") or self._channel_guild_id(channel_id, token)
+        return store.discord_message_url(channel_id, message_id, guild_id)
 
     # ---------- 账号轮换 ----------
     def _ready_account_available(self):
@@ -294,6 +324,7 @@ class BotEngine:
                 matched_code=task["matched_code"],
                 matched_link=task["matched_link"],
                 reply_status="pending",
+                message_url=task.get("message_url", ""),
             )
         self.log(f"⏳ 账号冷却中，已加入待回复队列 @{task['username']} | msg:{msg_id}")
 
@@ -318,6 +349,7 @@ class BotEngine:
                 matched_code=task["matched_code"],
                 matched_link=task["matched_link"],
                 reply_status="sent",
+                message_url=task.get("message_url", ""),
             )
 
     def _record_failed_reply(self, task, reason, reply_log_enabled):
@@ -342,6 +374,7 @@ class BotEngine:
             matched_link=task["matched_link"],
             reply_status="failed",
             skip_reason=reason,
+            message_url=task.get("message_url", ""),
         )
 
     def _record_skipped_message(self, msg, username, content, image_urls, reason, reply_log_enabled):
@@ -366,6 +399,7 @@ class BotEngine:
             matched_link="",
             reply_status="skipped",
             skip_reason=reason,
+            message_url=msg.get("message_url", ""),
         )
 
     def _cleanup_runtime_state(self, reply_log_enabled):
@@ -469,6 +503,8 @@ class BotEngine:
                 listen_interval = self._int_setting(settings, "LISTEN_INTERVAL", 5, minimum=1)
                 skip_chinese = settings.get("SKIP_CHINESE", "1") == "1"
                 skip_link = settings.get("SKIP_LINK_MSG", "1") == "1"
+                image_ocr_filter_enabled = settings.get("IMAGE_OCR_FILTER_ENABLED", "0") == "1"
+                image_ocr_languages = settings.get("IMAGE_OCR_LANGUAGES", "eng") or "eng"
                 reply_log_enabled = settings.get("REPLY_LOG_ENABLED", "1") == "1"
                 send_interval = self._int_setting(settings, "SEND_INTERVAL", 5, minimum=0)
                 self._cleanup_runtime_state(reply_log_enabled)
@@ -529,6 +565,8 @@ class BotEngine:
                         ):
                             continue
                         self.processed[msg_id] = time.time()
+                        message_url = self._message_url(msg, listen_token)
+                        msg["message_url"] = message_url
 
                         content = (msg.get("content") or "").strip()
                         author = msg.get("author", {})
@@ -576,6 +614,26 @@ class BotEngine:
                             if data:
                                 image_bytes.append(data)
 
+                        if image_ocr_filter_enabled and image_bytes:
+                            ocr_result = image_text_filter.find_blocked_keyword_in_images(
+                                self.user_id,
+                                image_bytes,
+                                languages=image_ocr_languages,
+                            )
+                            for err in ocr_result.get("errors", []):
+                                if err and err != self._last_ocr_error:
+                                    self._last_ocr_error = err
+                                    self.log(f"⚠️ 图片文字识别失败：{err[:60]}")
+                            image_blocked_keyword = ocr_result.get("keyword")
+                            if image_blocked_keyword:
+                                self._record_skipped_message(
+                                    msg, username, content, image_urls,
+                                    f"image_ocr_blocked_keyword:{image_blocked_keyword}",
+                                    reply_log_enabled,
+                                )
+                                self.log(f"图片文字屏蔽关键字命中 @{username}: {image_blocked_keyword}")
+                                continue
+
                         result = matcher.match(
                             content=content,
                             image_bytes=image_bytes,
@@ -586,7 +644,12 @@ class BotEngine:
                         reply = result["link"]
                         if reply:
                             record_match_type = "none" if result["type"] == "shop" else result["type"]
-                            kind = {"keyword": "商品名", "image": "图片", "shop": "不匹配"}.get(result["type"], result["type"])
+                            kind = {
+                                "exact_keyword": "精确关键字",
+                                "keyword": "商品名",
+                                "image": "图片",
+                                "shop": "不匹配",
+                            }.get(result["type"], result["type"])
                             self.log(f"🎯 {kind}匹配 @{username}: {content[:20]}")
                             reply_task = {
                                 "channel_id": msg_channel_id,
@@ -600,8 +663,11 @@ class BotEngine:
                                 "had_image": bool(image_bytes),
                                 "image_urls": image_urls,
                                 "match_type": record_match_type,
-                                "matched_code": result["product"]["code"] if result["product"] else "",
+                                "matched_code": (
+                                    result["product"]["code"] if result["product"] else result.get("exact_keyword", "")
+                                ),
                                 "matched_link": result["link"],
+                                "message_url": message_url,
                             }
                             send_info, reason = self._reply_with_rotation(
                                 msg_channel_id, username, reply, msg_id,
@@ -634,6 +700,7 @@ class BotEngine:
                                 matched_link="",
                                 reply_status="skipped",
                                 skip_reason="no_reply",
+                                message_url=message_url,
                             )
 
                 except requests.RequestException as e:

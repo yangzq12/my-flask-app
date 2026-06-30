@@ -4,6 +4,7 @@
 {% block page_title %}仪表盘{% endblock %}
 
 {% block content %}
+{% set record_type_labels = {'matched': '匹配', 'unmatched': '不匹配', 'skipped': '跳过'} %}
 <div class="stat-grid">
   <div class="stat"><div class="num">{{ stats.products }}</div><div class="label">商品总数</div></div>
   <div class="stat"><div class="num">{{ stats.image_products }}</div><div class="label">已启用图片识别</div></div>
@@ -21,7 +22,9 @@
   <div class="toolbar">
     <div>
       <h2 style="margin:0;">消息处理记录</h2>
-      <div class="hint">删除已发送记录后，重启时将不再用该记录防重复。</div>
+      <div class="hint">
+        共 {{ record_pagination.total }} 条，第 {{ record_pagination.page }} / {{ record_pagination.total_pages }} 页
+      </div>
     </div>
     <div class="toolbar-actions">
       <button class="btn btn-secondary" type="submit" form="message_records_form"
@@ -38,8 +41,24 @@
       </button>
     </div>
   </div>
+
+  <form class="record-filter" method="get">
+    <input type="hidden" name="record_filter" value="1">
+    <input type="hidden" name="page" value="1">
+    <span class="record-filter-label">显示</span>
+    {% for t in record_types %}
+    <label class="check-pill">
+      <input type="checkbox" name="types" value="{{ t }}"
+             {{ 'checked' if t in selected_record_types }}>
+      {{ record_type_labels[t] }}
+    </label>
+    {% endfor %}
+    <button class="btn btn-secondary btn-sm" type="submit">筛选</button>
+  </form>
+
   {% if message_records %}
   <form method="post" id="message_records_form">
+  <input type="hidden" name="next" value="{{ record_pagination.current_url }}">
   <table>
     <thead>
       <tr>
@@ -54,11 +73,22 @@
         <td>{{ r['created_at'] }}</td>
         <td>{{ r['username'] or '—' }}</td>
         <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-          {{ r['user_content'] or ('[图片]' if r['had_image'] else '—') }}
+          {% set original_text = r['user_content'] or ('[图片]' if r['had_image'] else '—') %}
+          {% set original_url = r['message_url'] %}
+          {% if not original_url and r['channel_id'] and r['message_id'] %}
+            {% set original_url = 'https://discord.com/channels/@me/' ~ r['channel_id'] ~ '/' ~ r['message_id'] %}
+          {% endif %}
+          {% if original_url %}
+          <a class="message-link" href="{{ original_url }}" target="_blank" rel="noopener noreferrer"
+             title="{{ original_url }}">{{ original_text }}</a>
+          {% else %}
+          {{ original_text }}
+          {% endif %}
         </td>
         <td>{{ '是' if r['had_image'] else '否' }}</td>
         <td>
-          {% if r['match_type']=='keyword' %}<span class="tag kw">文字匹配 {{ r['matched_code'] }}</span>
+          {% if r['match_type']=='exact_keyword' %}<span class="tag kw">精确匹配 {{ r['matched_code'] }}</span>
+          {% elif r['match_type']=='keyword' %}<span class="tag kw">文字匹配 {{ r['matched_code'] }}</span>
           {% elif r['match_type']=='image' %}<span class="tag img">图片匹配 {{ r['matched_code'] }}</span>
           {% elif r['match_type'] in ['none','shop'] %}<span class="tag shop">不匹配</span>
           {% elif r['match_type']=='skipped' %}<span class="tag off">跳过</span>
@@ -87,6 +117,24 @@
   {% else %}
   <div class="empty">暂无消息处理记录</div>
   {% endif %}
+
+  <div class="pager">
+    <div class="pager-info">
+      每页 {{ record_pagination.page_size }} 条，共 {{ record_pagination.total_pages }} 页
+    </div>
+    <div class="toolbar-actions">
+      {% if record_pagination.has_prev %}
+      <a class="btn btn-secondary btn-sm" href="{{ record_pagination.prev_url }}">上一页</a>
+      {% else %}
+      <span class="btn btn-secondary btn-sm disabled">上一页</span>
+      {% endif %}
+      {% if record_pagination.has_next %}
+      <a class="btn btn-secondary btn-sm" href="{{ record_pagination.next_url }}">下一页</a>
+      {% else %}
+      <span class="btn btn-secondary btn-sm disabled">下一页</span>
+      {% endif %}
+    </div>
+  </div>
 </div>
 {% endblock %}
 
