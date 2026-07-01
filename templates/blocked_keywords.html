@@ -18,6 +18,25 @@
 </div>
 
 <div class="card">
+  <div class="toolbar">
+    <div>
+      <h2 style="margin:0;">批量配置</h2>
+      <div class="hint">txt 每行一个屏蔽关键字；重复关键字会自动跳过。</div>
+    </div>
+    <div class="toolbar-actions">
+      <a class="btn btn-secondary" href="{{ url_for('blocked_keywords_export') }}">下载 txt</a>
+      <form method="post" action="{{ url_for('blocked_keywords_import') }}" enctype="multipart/form-data" class="inline-import-form">
+        <label class="btn btn-secondary">
+          上传 txt
+          <input class="file-picker-hidden" type="file" name="keywords_file" accept=".txt,text/plain"
+                 onchange="if (this.files.length && confirm('导入 txt 会新增屏蔽关键字，重复项会跳过，继续？')) { this.form.submit(); } else { this.value = ''; }">
+        </label>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="card">
   <h2>已添加的屏蔽关键字</h2>
   {% if keywords %}
   <table>

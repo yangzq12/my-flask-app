@@ -748,6 +748,43 @@ def delete_blocked_keyword(user_id, keyword_id):
     _bump_blocked_keywords_cache(user_id)
 
 
+def import_blocked_keywords(user_id, text):
+    user_id = _normalize_user_id(user_id)
+    imported = 0
+    skipped = 0
+    now = _now()
+    with get_conn() as conn:
+        for line in (text or "").splitlines():
+            keyword = (line or "").strip()
+            norm = _keyword_norm(keyword)
+            if not keyword or not norm or len(keyword) > 200:
+                skipped += 1
+                continue
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO blocked_keywords(user_id, keyword, keyword_norm, created_at)
+                   VALUES(?,?,?,?)""",
+                (user_id, keyword, norm, now),
+            )
+            if cur.rowcount:
+                imported += 1
+            else:
+                skipped += 1
+    if imported:
+        _bump_blocked_keywords_cache(user_id)
+    return imported, skipped
+
+
+def blocked_keywords_export_text(user_id=None):
+    user_id = _normalize_user_id(user_id)
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT keyword FROM blocked_keywords WHERE user_id=? ORDER BY id",
+            (user_id,),
+        ).fetchall()
+    text = "\n".join(row["keyword"] for row in rows)
+    return f"{text}\n" if text else ""
+
+
 def _cached_blocked_keywords(user_id):
     user_id = _normalize_user_id(user_id)
     if user_id not in _BLOCKED_KEYWORDS_CACHE:
@@ -1142,6 +1179,337 @@ def owns_upload(user_id, image_path):
             (user_id, image_path, image_path),
         ).fetchone()
     return bool(row)
+
+
+# ---------------- 当前用户迁移备份 ----------------
+def export_user_migration_data(user_id=None):
+    user_id = _normalize_user_id(user_id)
+    data = {}
+    with get_conn() as conn:
+        data["settings"] = [
+            dict(row) for row in conn.execute(
+                "SELECT key, value FROM settings WHERE user_id=? ORDER BY key",
+                (user_id,),
+            ).fetchall()
+        ]
+        data["accounts"] = [
+            dict(row) for row in conn.execute(
+                """SELECT name, token, next_available_time, last_used_time, status,
+                          invalid_reason, invalid_at, created_at
+                   FROM accounts WHERE user_id=? ORDER BY id""",
+                (user_id,),
+            ).fetchall()
+        ]
+        data["blocked_keywords"] = [
+            dict(row) for row in conn.execute(
+                """SELECT keyword, keyword_norm, created_at
+                   FROM blocked_keywords WHERE user_id=? ORDER BY id""",
+                (user_id,),
+            ).fetchall()
+        ]
+        data["exact_keyword_replies"] = [
+            dict(row) for row in conn.execute(
+                """SELECT keyword, keyword_norm, reply_link, created_at, updated_at
+                   FROM exact_keyword_replies WHERE user_id=? ORDER BY id""",
+                (user_id,),
+            ).fetchall()
+        ]
+        products = [
+            dict(row) for row in conn.execute(
+                """SELECT id, code, name, link, shop, image_path, image_hash,
+                          image_enabled, enabled, created_at, updated_at
+                   FROM products WHERE user_id=? ORDER BY id""",
+                (user_id,),
+            ).fetchall()
+        ]
+        data["products"] = products
+
+        product_ids = [row["id"] for row in products]
+        product_images = []
+        if product_ids:
+            placeholders = ",".join("?" for _ in product_ids)
+            product_images = [
+                dict(row) for row in conn.execute(
+                    f"""SELECT id, product_id, image_path, image_hash, created_at
+                        FROM product_images
+                        WHERE product_id IN ({placeholders})
+                        ORDER BY product_id, id""",
+                    product_ids,
+                ).fetchall()
+            ]
+        seen_product_image_paths = {
+            (row["product_id"], row["image_path"]) for row in product_images if row.get("image_path")
+        }
+        for product in products:
+            image_path = product.get("image_path")
+            if image_path and (product["id"], image_path) not in seen_product_image_paths:
+                product_images.append({
+                    "id": None,
+                    "product_id": product["id"],
+                    "image_path": image_path,
+                    "image_hash": product.get("image_hash", ""),
+                    "created_at": product.get("created_at", _now()),
+                })
+        data["product_images"] = product_images
+
+        data["match_logs"] = [
+            dict(row) for row in conn.execute(
+                """SELECT source, query_text, had_image, match_type, matched_code,
+                          matched_link, created_at
+                   FROM match_logs WHERE user_id=? ORDER BY id""",
+                (user_id,),
+            ).fetchall()
+        ]
+        data["replied_messages"] = [
+            dict(row) for row in conn.execute(
+                """SELECT source, channel_id, message_id, author_id, username, user_content,
+                          had_image, image_urls, reply_content, reply_mode, reply_channel_id,
+                          account_name, match_type, matched_code, matched_link, created_at
+                   FROM replied_messages WHERE user_id=? ORDER BY id""",
+                (user_id,),
+            ).fetchall()
+        ]
+        data["message_records"] = [
+            dict(row) for row in conn.execute(
+                """SELECT source, channel_id, message_id, message_url, author_id, username,
+                          user_content, had_image, image_urls, match_type, matched_code,
+                          matched_link, reply_content, reply_status, reply_mode,
+                          reply_channel_id, account_name, skip_reason, created_at, updated_at
+                   FROM message_records WHERE user_id=? ORDER BY id""",
+                (user_id,),
+            ).fetchall()
+        ]
+    return data
+
+
+def replace_user_migration_data(user_id, data):
+    user_id = _normalize_user_id(user_id)
+    data = data if isinstance(data, dict) else {}
+    now = _now()
+    with get_conn() as conn:
+        product_ids = [
+            row["id"] for row in conn.execute(
+                "SELECT id FROM products WHERE user_id=?", (user_id,)
+            ).fetchall()
+        ]
+        if product_ids:
+            placeholders = ",".join("?" for _ in product_ids)
+            conn.execute(f"DELETE FROM product_images WHERE product_id IN ({placeholders})", product_ids)
+
+        for table in (
+            "message_records", "replied_messages", "match_logs", "blocked_keywords",
+            "exact_keyword_replies", "accounts", "settings", "products",
+        ):
+            conn.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
+
+        for row in data.get("settings", []) or []:
+            if not isinstance(row, dict) or not row.get("key"):
+                continue
+            conn.execute(
+                "INSERT OR REPLACE INTO settings(user_id, key, value) VALUES(?,?,?)",
+                (user_id, str(row.get("key", "")), str(row.get("value", ""))),
+            )
+
+        for row in data.get("accounts", []) or []:
+            if not isinstance(row, dict) or not row.get("name"):
+                continue
+            conn.execute(
+                """INSERT OR IGNORE INTO accounts(
+                       user_id, name, token, next_available_time, last_used_time,
+                       status, invalid_reason, invalid_at, created_at
+                   )
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                (
+                    user_id,
+                    str(row.get("name", "")),
+                    str(row.get("token", "")),
+                    float(row.get("next_available_time") or 0),
+                    str(row.get("last_used_time") or "从未使用"),
+                    str(row.get("status") or "active"),
+                    str(row.get("invalid_reason") or ""),
+                    str(row.get("invalid_at") or ""),
+                    str(row.get("created_at") or now),
+                ),
+            )
+
+        for row in data.get("blocked_keywords", []) or []:
+            keyword = str(row.get("keyword", "")).strip() if isinstance(row, dict) else ""
+            keyword_norm = _keyword_norm(keyword)
+            if not keyword or not keyword_norm:
+                continue
+            conn.execute(
+                """INSERT OR IGNORE INTO blocked_keywords(user_id, keyword, keyword_norm, created_at)
+                   VALUES(?,?,?,?)""",
+                (user_id, keyword, keyword_norm, str(row.get("created_at") or now)),
+            )
+
+        for row in data.get("exact_keyword_replies", []) or []:
+            if not isinstance(row, dict):
+                continue
+            keyword = str(row.get("keyword", "")).strip()
+            reply_link = str(row.get("reply_link", "")).strip()
+            keyword_norm = _exact_keyword_norm(keyword)
+            if not keyword_norm or not reply_link:
+                continue
+            conn.execute(
+                """INSERT OR IGNORE INTO exact_keyword_replies(
+                       user_id, keyword, keyword_norm, reply_link, created_at, updated_at
+                   )
+                   VALUES(?,?,?,?,?,?)""",
+                (
+                    user_id, keyword, keyword_norm, reply_link,
+                    str(row.get("created_at") or now),
+                    str(row.get("updated_at") or row.get("created_at") or now),
+                ),
+            )
+
+        product_id_map = {}
+        for row in data.get("products", []) or []:
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("code", "")).strip()
+            name = str(row.get("name", "")).strip()
+            if not code or not name:
+                continue
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO products(
+                       user_id, code, name, link, shop, image_path, image_hash,
+                       image_enabled, enabled, created_at, updated_at
+                   )
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    user_id,
+                    code,
+                    name,
+                    str(row.get("link") or ""),
+                    str(row.get("shop") or ""),
+                    str(row.get("image_path") or ""),
+                    str(row.get("image_hash") or ""),
+                    int(row.get("image_enabled") or 0),
+                    int(row.get("enabled") if row.get("enabled") is not None else 1),
+                    str(row.get("created_at") or now),
+                    str(row.get("updated_at") or row.get("created_at") or now),
+                ),
+            )
+            new_product = conn.execute(
+                "SELECT id FROM products WHERE user_id=? AND code=?", (user_id, code)
+            ).fetchone()
+            if new_product:
+                product_id_map[row.get("id")] = new_product["id"]
+
+        for row in data.get("product_images", []) or []:
+            if not isinstance(row, dict):
+                continue
+            product_id = product_id_map.get(row.get("product_id"))
+            image_path = str(row.get("image_path") or "")
+            if not product_id or not image_path:
+                continue
+            conn.execute(
+                """INSERT INTO product_images(product_id, image_path, image_hash, created_at)
+                   VALUES(?,?,?,?)""",
+                (
+                    product_id,
+                    image_path,
+                    str(row.get("image_hash") or ""),
+                    str(row.get("created_at") or now),
+                ),
+            )
+
+        for row in data.get("match_logs", []) or []:
+            if not isinstance(row, dict):
+                continue
+            conn.execute(
+                """INSERT INTO match_logs(
+                       user_id, source, query_text, had_image, match_type,
+                       matched_code, matched_link, created_at
+                   )
+                   VALUES(?,?,?,?,?,?,?,?)""",
+                (
+                    user_id,
+                    str(row.get("source") or ""),
+                    str(row.get("query_text") or "")[:200],
+                    int(row.get("had_image") or 0),
+                    str(row.get("match_type") or ""),
+                    str(row.get("matched_code") or ""),
+                    str(row.get("matched_link") or ""),
+                    str(row.get("created_at") or now),
+                ),
+            )
+
+        for row in data.get("replied_messages", []) or []:
+            if not isinstance(row, dict):
+                continue
+            conn.execute(
+                """INSERT OR IGNORE INTO replied_messages(
+                       user_id, source, channel_id, message_id, author_id, username, user_content,
+                       had_image, image_urls, reply_content, reply_mode, reply_channel_id,
+                       account_name, match_type, matched_code, matched_link, created_at
+                   )
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    user_id,
+                    str(row.get("source") or "discord"),
+                    str(row.get("channel_id") or ""),
+                    str(row.get("message_id") or ""),
+                    str(row.get("author_id") or ""),
+                    str(row.get("username") or ""),
+                    str(row.get("user_content") or "")[:1000],
+                    int(row.get("had_image") or 0),
+                    str(row.get("image_urls") or ""),
+                    str(row.get("reply_content") or ""),
+                    str(row.get("reply_mode") or ""),
+                    str(row.get("reply_channel_id") or ""),
+                    str(row.get("account_name") or ""),
+                    str(row.get("match_type") or ""),
+                    str(row.get("matched_code") or ""),
+                    str(row.get("matched_link") or ""),
+                    str(row.get("created_at") or now),
+                ),
+            )
+
+        for row in data.get("message_records", []) or []:
+            if not isinstance(row, dict):
+                continue
+            conn.execute(
+                """INSERT OR IGNORE INTO message_records(
+                       user_id, source, channel_id, message_id, message_url,
+                       author_id, username, user_content,
+                       had_image, image_urls, match_type, matched_code, matched_link,
+                       reply_content, reply_status, reply_mode, reply_channel_id, account_name,
+                       skip_reason, created_at, updated_at
+                   )
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    user_id,
+                    str(row.get("source") or "discord"),
+                    str(row.get("channel_id") or ""),
+                    str(row.get("message_id") or ""),
+                    str(row.get("message_url") or ""),
+                    str(row.get("author_id") or ""),
+                    str(row.get("username") or ""),
+                    str(row.get("user_content") or "")[:1000],
+                    int(row.get("had_image") or 0),
+                    str(row.get("image_urls") or ""),
+                    str(row.get("match_type") or ""),
+                    str(row.get("matched_code") or ""),
+                    str(row.get("matched_link") or ""),
+                    str(row.get("reply_content") or ""),
+                    str(row.get("reply_status") or ""),
+                    str(row.get("reply_mode") or ""),
+                    str(row.get("reply_channel_id") or ""),
+                    str(row.get("account_name") or ""),
+                    str(row.get("skip_reason") or ""),
+                    str(row.get("created_at") or now),
+                    str(row.get("updated_at") or row.get("created_at") or now),
+                ),
+            )
+
+        _ensure_default_settings(conn, user_id)
+
+    _PRODUCT_CACHE_VERSION.pop(user_id, None)
+    _BLOCKED_KEYWORDS_CACHE.pop(user_id, None)
+    _EXACT_KEYWORD_REPLY_CACHE.pop(user_id, None)
+    export_product_maps(user_id)
 
 
 # ---------------- 账号 ----------------

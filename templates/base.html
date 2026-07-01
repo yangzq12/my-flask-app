@@ -16,6 +16,8 @@
       <span class="ico">📄</span> 新增数据</a>
     <a class="nav-item {{ 'active' if active=='products' }}" href="{{ url_for('products') }}">
       <span class="ico">📝</span> 数据管理</a>
+    <a class="nav-item {{ 'active' if active=='migration' }}" href="{{ url_for('migration_page') }}">
+      <span class="ico">📦</span> 数据迁移</a>
 
     <div class="nav-group-title">系统</div>
     <a class="nav-item {{ 'active' if active=='dashboard' }}" href="{{ url_for('dashboard') }}">

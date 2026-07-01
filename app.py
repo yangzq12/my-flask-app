@@ -321,6 +321,158 @@ def product_delete(pid):
     return redirect(url_for("products"))
 
 
+def _attach_migration_images(zf, data):
+    image_files = []
+    seen_paths = {}
+    for img in data.get("product_images", []) or []:
+        image_path = img.get("image_path") or ""
+        if not image_path:
+            img["archive_path"] = ""
+            continue
+        if image_path in seen_paths:
+            img["archive_path"] = seen_paths[image_path]
+            continue
+        full_path = os.path.abspath(os.path.join(config.BASE_DIR, image_path))
+        upload_root = os.path.abspath(config.UPLOAD_DIR)
+        if not full_path.startswith(upload_root + os.sep) or not os.path.isfile(full_path):
+            img["archive_path"] = ""
+            continue
+        ext = os.path.splitext(image_path)[1].lower() or ".jpg"
+        archive_path = f"uploads/{uuid.uuid4().hex}{ext}"
+        img["archive_path"] = archive_path
+        seen_paths[image_path] = archive_path
+        image_files.append((full_path, archive_path))
+    for full_path, archive_path in image_files:
+        zf.write(full_path, archive_path)
+
+
+def _user_upload_paths(user_id):
+    paths = set()
+    for product in store.list_products(user_id):
+        if product["image_path"]:
+            paths.add(product["image_path"])
+        for img in store.product_images(user_id, product["id"]):
+            if img["image_path"]:
+                paths.add(img["image_path"])
+    return paths
+
+
+def _prepare_migration_images(zf, data):
+    names = set(zf.namelist())
+    image_path_map = {}
+    written_files = []
+    for img in data.get("product_images", []) or []:
+        if not isinstance(img, dict):
+            continue
+        old_path = img.get("image_path") or ""
+        archive_path = _clean_zip_path(img.get("archive_path", ""))
+        if old_path in image_path_map:
+            img["image_path"] = image_path_map[old_path]
+            continue
+        if not archive_path or archive_path not in names:
+            img["image_path"] = ""
+            continue
+        ext = _image_ext(archive_path)
+        if ext not in config.ALLOWED_IMAGE_EXT:
+            img["image_path"] = ""
+            continue
+        data_bytes = zf.read(archive_path)
+        try:
+            img["image_hash"] = compute_hash(data_bytes)
+        except Exception:
+            img["image_path"] = ""
+            continue
+        rel = os.path.join("uploads", str(current_user_id()), f"{uuid.uuid4().hex}.{ext}")
+        os.makedirs(os.path.dirname(os.path.join(config.BASE_DIR, rel)), exist_ok=True)
+        with open(os.path.join(config.BASE_DIR, rel), "wb") as out:
+            out.write(data_bytes)
+        image_path_map[old_path] = rel
+        img["image_path"] = rel
+        written_files.append(rel)
+
+    for product in data.get("products", []) or []:
+        if not isinstance(product, dict):
+            continue
+        old_path = product.get("image_path") or ""
+        product["image_path"] = image_path_map.get(old_path, "")
+        if not product["image_path"]:
+            product["image_hash"] = ""
+    return written_files
+
+
+@app.route("/migration")
+@login_required
+def migration_page():
+    return render_template("migration.html")
+
+
+@app.route("/migration/export")
+@login_required
+def migration_export():
+    uid = current_user_id()
+    data = store.export_user_migration_data(uid)
+    payload = {
+        "version": 1,
+        "type": "user-migration-backup",
+        "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "source_username": session.get("user", ""),
+        "data": data,
+    }
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        _attach_migration_images(zf, data)
+        zf.writestr("migration.json", json.dumps(payload, ensure_ascii=False, indent=2))
+    buffer.seek(0)
+
+    filename = f"user_migration_{time.strftime('%Y%m%d_%H%M%S')}.zip"
+    return send_file(buffer, mimetype="application/zip", as_attachment=True, download_name=filename)
+
+
+@app.route("/migration/import", methods=["POST"])
+@login_required
+def migration_import():
+    file = request.files.get("migration_backup")
+    if not file or not file.filename:
+        flash("请选择迁移备份 zip 文件", "error")
+        return redirect(url_for("migration_page"))
+    if not file.filename.lower().endswith(".zip"):
+        flash("只支持上传 zip 格式的迁移备份包", "error")
+        return redirect(url_for("migration_page"))
+
+    uid = current_user_id()
+    written_files = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(file.read())) as zf:
+            if "migration.json" not in zf.namelist():
+                flash("迁移包缺少 migration.json", "error")
+                return redirect(url_for("migration_page"))
+            payload = json.loads(zf.read("migration.json").decode("utf-8"))
+            if payload.get("type") != "user-migration-backup":
+                flash("迁移包类型不正确", "error")
+                return redirect(url_for("migration_page"))
+            data = payload.get("data")
+            if not isinstance(data, dict):
+                flash("迁移包数据格式错误", "error")
+                return redirect(url_for("migration_page"))
+
+            old_upload_paths = _user_upload_paths(uid)
+            written_files = _prepare_migration_images(zf, data)
+            engine.stop_user(uid)
+            engine.clear_state(uid)
+            store.replace_user_migration_data(uid, data)
+            _delete_upload_files(old_upload_paths - set(written_files))
+
+        flash("当前用户数据迁移导入完成", "success")
+    except (zipfile.BadZipFile, json.JSONDecodeError):
+        _delete_upload_files(set(written_files))
+        flash("迁移包无法解析，请确认上传的是系统导出的 zip 文件", "error")
+    except Exception as e:
+        _delete_upload_files(set(written_files))
+        flash(f"迁移导入失败：{e}", "error")
+    return redirect(url_for("migration_page"))
+
+
 @app.route("/products/export")
 @login_required
 def products_export():
@@ -667,6 +819,35 @@ def blocked_keywords():
 def blocked_keyword_delete(keyword_id):
     store.delete_blocked_keyword(current_user_id(), keyword_id)
     flash("屏蔽关键字已删除", "success")
+    return redirect(url_for("blocked_keywords"))
+
+
+@app.route("/blocked-keywords/export")
+@login_required
+def blocked_keywords_export():
+    text = store.blocked_keywords_export_text(current_user_id())
+    buffer = io.BytesIO(text.encode("utf-8"))
+    buffer.seek(0)
+    filename = f"blocked_keywords_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+    return send_file(buffer, mimetype="text/plain; charset=utf-8", as_attachment=True, download_name=filename)
+
+
+@app.route("/blocked-keywords/import", methods=["POST"])
+@login_required
+def blocked_keywords_import():
+    file = request.files.get("keywords_file")
+    if not file or not file.filename:
+        flash("请选择 txt 文件", "error")
+        return redirect(url_for("blocked_keywords"))
+    if not file.filename.lower().endswith(".txt"):
+        flash("只支持上传 txt 文件", "error")
+        return redirect(url_for("blocked_keywords"))
+    text = file.read().decode("utf-8-sig", errors="replace")
+    imported, skipped = store.import_blocked_keywords(current_user_id(), text)
+    if imported:
+        flash(f"已导入 {imported} 条屏蔽关键字，跳过 {skipped} 条", "success")
+    else:
+        flash("没有导入新的屏蔽关键字，请检查 txt 内容", "error")
     return redirect(url_for("blocked_keywords"))
 
 
