@@ -708,6 +708,10 @@ def _keyword_norm(keyword):
     return (keyword or "").strip().casefold()
 
 
+def _keyword_compact_norm(keyword):
+    return "".join(_keyword_norm(keyword).split())
+
+
 def list_blocked_keywords(user_id=None):
     user_id = _normalize_user_id(user_id)
     with get_conn() as conn:
@@ -761,8 +765,16 @@ def find_blocked_keyword(user_id, text):
     text_norm = _keyword_norm(text)
     if not text_norm:
         return None
+    text_compact_norm = _keyword_compact_norm(text)
     for keyword, keyword_norm in _cached_blocked_keywords(user_id):
-        if keyword_norm and keyword_norm in text_norm:
+        keyword_compact_norm = _keyword_compact_norm(keyword_norm)
+        if (
+            keyword_norm
+            and (
+                keyword_norm in text_norm
+                or (keyword_compact_norm and keyword_compact_norm in text_compact_norm)
+            )
+        ):
             return keyword
     return None
 
@@ -1006,6 +1018,62 @@ def add_product_image(user_id, product_id, image_path, image_hash):
                 (now, user_id, product_id),
             )
     _bump_product_cache_version(user_id)
+
+
+def delete_product_images(user_id, product_id, image_ids):
+    user_id = _normalize_user_id(user_id)
+    ids = []
+    for image_id in image_ids or []:
+        try:
+            parsed = int(image_id)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0 and parsed not in ids:
+            ids.append(parsed)
+    if not ids:
+        return []
+
+    now = _now()
+    with get_conn() as conn:
+        product = conn.execute(
+            "SELECT id FROM products WHERE user_id=? AND id=?",
+            (user_id, product_id),
+        ).fetchone()
+        if not product:
+            return []
+
+        placeholders = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            f"""SELECT id, image_path
+                FROM product_images
+                WHERE product_id=? AND id IN ({placeholders})""",
+            [product_id] + ids,
+        ).fetchall()
+        if not rows:
+            return []
+
+        conn.execute(
+            f"DELETE FROM product_images WHERE product_id=? AND id IN ({placeholders})",
+            [product_id] + ids,
+        )
+        remaining = conn.execute(
+            """SELECT image_path, image_hash
+               FROM product_images
+               WHERE product_id=?
+               ORDER BY id
+               LIMIT 1""",
+            (product_id,),
+        ).fetchone()
+        first_path = remaining["image_path"] if remaining else ""
+        first_hash = remaining["image_hash"] if remaining else ""
+        conn.execute(
+            "UPDATE products SET image_path=?, image_hash=?, updated_at=? WHERE user_id=? AND id=?",
+            (first_path, first_hash, now, user_id, product_id),
+        )
+
+    _bump_product_cache_version(user_id)
+    export_product_maps(user_id)
+    return [row["image_path"] for row in rows if row["image_path"]]
 
 
 def replace_product_images(user_id, product_id, images, product_image_hash=None):

@@ -164,8 +164,14 @@ def users():
             flash(msg, "success" if ok else "error")
         elif action == "delete":
             target_id = request.form.get("user_id", "")
-            if str(target_id) == str(session.get("user_id")):
+            confirm_password = request.form.get("confirm_password", "")
+            target_user = store.get_user_by_id(target_id) if str(target_id).strip().isdigit() else None
+            if not target_user:
+                flash("账号不存在", "error")
+            elif str(target_id) == str(session.get("user_id")):
                 flash("不能删除当前登录账号", "error")
+            elif not store.verify_user(session.get("user", ""), confirm_password):
+                flash("当前账号密码错误，未删除用户", "error")
             else:
                 engine.stop_user(target_id)
                 ok, msg = store.delete_user(target_id)
@@ -173,14 +179,14 @@ def users():
         elif action == "reset_password":
             target_id = request.form.get("user_id", "")
             target_user = store.get_user_by_id(target_id) if str(target_id).strip().isdigit() else None
-            if not target_user or target_user["username"] != config.ADMIN_USERNAME:
-                ok, msg = False, "只有默认 admin 账号需要重置密码"
+            if not target_user:
+                ok, msg = False, "账号不存在"
             else:
                 ok, msg = store.reset_user_password(target_id, request.form.get("password", ""))
             flash(msg, "success" if ok else "error")
         return redirect(url_for("users"))
 
-    return render_template("users.html", users=store.list_users(), initial_username=config.ADMIN_USERNAME)
+    return render_template("users.html", users=store.list_users())
 
 
 # ---------------- 仪表盘 ----------------
@@ -545,6 +551,7 @@ def _save_product(pid):
     # 处理图片上传。商品可追加多张图，匹配时每张图都会参与比较。
     image_path = ""
     image_hash = ""
+    remove_image_ids = request.form.getlist("remove_image_ids") if pid is not None else []
     if pid is not None:
         cur = store.get_product(uid, pid)
         image_path = cur["image_path"]
@@ -570,6 +577,16 @@ def _save_product(pid):
             rel = os.path.join("uploads", str(uid), fname)
             images_to_add.append((rel, img_hash, data))
 
+        if images_to_add and not image_path:
+            image_path = images_to_add[0][0]
+            image_hash = images_to_add[0][1]
+
+    if pid is not None and remove_image_ids:
+        removed_paths = store.delete_product_images(uid, pid, remove_image_ids)
+        _delete_upload_files(removed_paths)
+        cur = store.get_product(uid, pid)
+        image_path = cur["image_path"]
+        image_hash = cur["image_hash"]
         if images_to_add and not image_path:
             image_path = images_to_add[0][0]
             image_hash = images_to_add[0][1]
@@ -719,19 +736,14 @@ def settings():
         items = {}
         for key in config.DEFAULT_SETTINGS:
             if key in request.form:
-                items[key] = request.form.get(key, "").strip()
+                value = request.form.get(key, "").strip()
+                if key == "IMAGE_OCR_LANGUAGES" and value not in config.OCR_LANGUAGE_VALUES:
+                    value = config.DEFAULT_SETTINGS[key]
+                items[key] = value
         if items:
             store.update_settings(uid, items)
             flash("配置已保存", "success")
 
-        # 修改登录凭据（可选）
-        new_user = request.form.get("new_username", "").strip()
-        new_pass = request.form.get("new_password", "")
-        if new_user and new_pass:
-            ok, msg = store.change_credentials(uid, new_user, new_pass)
-            flash(msg, "success" if ok else "error")
-            if ok:
-                session["user"] = new_user
         return redirect(url_for("settings"))
 
     return render_template(
@@ -739,6 +751,7 @@ def settings():
         settings=store.get_settings(uid),
         labels=config.SETTING_LABELS,
         keys=list(config.DEFAULT_SETTINGS.keys()),
+        ocr_language_options=config.OCR_LANGUAGE_OPTIONS,
     )
 
 

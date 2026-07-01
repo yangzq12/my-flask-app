@@ -182,8 +182,21 @@ td .thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; bo
 .image-select-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .file-picker-hidden { display: none; }
 .pending-grid { margin-top: 10px; }
-.pending-thumb { position: relative; width: 90px; }
-.pending-thumb .thumb { width: 90px; height: 90px; display: block; }
+.pending-thumb,
+.existing-thumb {
+  position: relative;
+  width: 90px;
+}
+.pending-thumb .thumb,
+.existing-thumb .thumb {
+  width: 90px;
+  height: 90px;
+  display: block;
+}
+.existing-thumb.marked-remove {
+  opacity: 0.35;
+  display: none;
+}
 .pending-remove {
   position: absolute;
   top: -7px;

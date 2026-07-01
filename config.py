@@ -45,6 +45,12 @@ DEFAULT_SETTINGS = {
     "IMAGE_MATCH_THRESHOLD": "0.875", # 图片相似度阈值(0~1,越大越严格)，等价旧距离阈值 16
 }
 
+OCR_LANGUAGE_OPTIONS = [
+    {"value": "eng", "label": "英文 (eng)"},
+    {"value": "eng+chi_sim", "label": "英文 + 简体中文 (eng+chi_sim)"},
+]
+OCR_LANGUAGE_VALUES = {item["value"] for item in OCR_LANGUAGE_OPTIONS}
+
 SETTING_LABELS = {
     "TARGET_CHANNEL_ID": "监听频道 ID",
     "CHANNEL_COOLDOWN": "单账号冷却(秒)",

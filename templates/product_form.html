@@ -55,13 +55,21 @@
     <div class="form-row" id="image_field" style="display:none;">
       <label>商品图片</label>
       {% if images %}
-        <div class="thumb-grid">
+        <div class="thumb-grid existing-image-grid" id="existing_image_grid" data-existing-count="{{ images|length }}">
           {% for img in images %}
-            <img src="{{ url_for('uploaded_file', filename=upload_path(img['image_path'])) }}"
-                 class="thumb" style="width:90px;height:90px;">
+            <div class="existing-thumb" data-image-id="{{ img['id'] }}">
+              <img src="{{ url_for('uploaded_file', filename=upload_path(img['image_path'])) }}"
+                   class="thumb" alt="已上传图片">
+              <button class="pending-remove existing-remove"
+                      type="button"
+                      data-remove-existing-image
+                      data-image-id="{{ img['id'] }}"
+                      aria-label="删除已上传图片">&times;</button>
+              <input type="hidden" name="remove_image_ids" value="{{ img['id'] }}" disabled>
+            </div>
           {% endfor %}
         </div>
-        <div class="hint">当前已上传 {{ images|length }} 张图片，新上传会追加到此商品</div>
+        <div class="hint" id="existing_image_count">当前已上传 {{ images|length }} 张图片，点叉后保存修改才会删除</div>
       {% endif %}
       <div class="image-select-row">
         <button class="btn btn-secondary btn-sm" type="button" id="image_pick_btn">选择图片</button>
@@ -104,9 +112,23 @@
   const linkConvertTarget = document.getElementById('link_convert_target');
   const linkConvertBtn = document.getElementById('link_convert_btn');
   const linkConvertStatus = document.getElementById('link_convert_status');
+  const existingGrid = document.getElementById('existing_image_grid');
+  const existingCount = document.getElementById('existing_image_count');
   const pendingFiles = [];
 
-  function sync() { field.style.display = toggle.checked ? 'block' : 'none'; }
+  function remainingExistingImages() {
+    return existingGrid ? existingGrid.querySelectorAll('.existing-thumb:not(.marked-remove)').length : 0;
+  }
+
+  function syncExistingCount() {
+    if (!existingCount) return;
+    const remaining = remainingExistingImages();
+    existingCount.textContent = remaining
+      ? `当前保留 ${remaining} 张已上传图片，点叉后保存修改才会删除`
+      : '已选择删除全部已上传图片，保存修改后生效';
+  }
+
+  function sync() { field.style.display = (toggle.checked || remainingExistingImages() > 0) ? 'block' : 'none'; }
 
   function extractWeidianItemId(rawUrl) {
     const text = (rawUrl || '').trim();
@@ -179,6 +201,19 @@
 
   toggle.addEventListener('change', sync);
   linkConvertBtn.addEventListener('click', convertProductLink);
+  if (existingGrid) {
+    existingGrid.querySelectorAll('[data-remove-existing-image]').forEach(button => {
+      button.addEventListener('click', () => {
+        const item = button.closest('.existing-thumb');
+        const input = item && item.querySelector('input[name="remove_image_ids"]');
+        if (!item || !input) return;
+        input.disabled = false;
+        item.classList.add('marked-remove');
+        syncExistingCount();
+        sync();
+      });
+    });
+  }
   pickBtn.addEventListener('click', () => picker.click());
   picker.addEventListener('change', () => {
     const file = picker.files && picker.files[0];
@@ -193,6 +228,7 @@
     }
   });
   sync();
+  syncExistingCount();
   renderPreview();
 </script>
 {% endblock %}
