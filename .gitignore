@@ -4,3 +4,12 @@ __pycache__/
 .env
 .DS_Store
 instance/
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local runtime data
+data/app.db
+
+# Generated product maps
+data/product_maps*.yaml
